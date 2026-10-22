@@ -1,116 +1,127 @@
-# Визиты МП
+# Vizity — field CRM for a medical rep
 
-Мобильное приложение для медицинского представителя: днём быстро записывать визиты к врачам и в аптеки прямо с телефона, вечером одной кнопкой отправлять руководителю месячный отчёт в Excel — в том самом файле и формате, который прислала компания.
+**English** | [Русский](README.ru.md)
 
-Работает без интернета, ставится на Android как приложение, отчёт уходит в WhatsApp через системное «Поделиться».
+A mobile app for a pharmaceutical sales rep: log visits to doctors and pharmacies on the go during the day, and in the evening send the monthly Excel report to the manager in one tap — in the very file and format the company sent.
+
+Works offline, installs on Android as an app, and the report goes to WhatsApp through the system share sheet. In daily production use.
 
 <p>
-  <img src="docs/screenshots/day-visits.png" width="200" alt="Визиты дня">
-  <img src="docs/screenshots/day-plan.png" width="200" alt="План дня">
-  <img src="docs/screenshots/visit-doctor.png" width="200" alt="Визит к врачу">
-  <img src="docs/screenshots/visit-pharmacy.png" width="200" alt="Визит в аптеку">
+  <img src="docs/screenshots/day-visits.png" width="200" alt="Visits of the day">
+  <img src="docs/screenshots/day-plan.png" width="200" alt="Plan of the day">
+  <img src="docs/screenshots/visit-doctor.png" width="200" alt="Doctor visit">
+  <img src="docs/screenshots/visit-pharmacy.png" width="200" alt="Pharmacy visit">
 </p>
 <p>
-  <img src="docs/screenshots/report.png" width="200" alt="Отчёт">
-  <img src="docs/screenshots/preview.png" width="200" alt="Предпросмотр отчёта">
-  <img src="docs/screenshots/search.png" width="200" alt="Поиск визитов">
-  <img src="docs/screenshots/login.png" width="200" alt="Вход">
+  <img src="docs/screenshots/report.png" width="200" alt="Report">
+  <img src="docs/screenshots/preview.png" width="200" alt="Report preview">
+  <img src="docs/screenshots/search.png" width="200" alt="Visit search">
+  <img src="docs/screenshots/login.png" width="200" alt="Sign in">
 </p>
 
-*Все данные на скриншотах вымышлены.*
+*All data in the screenshots is fictional. The interface is in Russian — the app is built for a Russian-speaking user.*
 
-## Зачем
+## Why
 
-Типичный день медпредставителя — 20–30 визитов. Обычно их пишут в блокнот, а вечером перепечатывают в Excel-шаблон, который присылает руководитель, и отправляют файл в WhatsApp. Перепечатка занимает вечер, а шаблон менять нельзя: компания принимает только свой файл, под своим именем и в своём оформлении.
+A typical rep's day is 20–30 visits. They usually get written down in a notebook, then retyped in the evening into an Excel template sent by the manager, and the file is sent over WhatsApp. Retyping eats the evening, and the template can't be changed: the company only accepts its own file, under its own name and with its own formatting.
 
-Приложение убирает перепечатку: визит записывается на ходу за полминуты, а отчёт собирается сам — значения вписываются в пустые ячейки исходного файла, остальное в книге остаётся байт в байт.
+The app removes the retyping: a visit is logged in about half a minute, and the report builds itself — values are written into the empty cells of the original file, and everything else in the workbook stays byte for byte.
 
-## Что умеет
+## Features
 
-- **Визиты врачей и аптек.** Автоподстановка из справочника по ФИО (ЛПУ, адрес, специальность, телефон), шесть кнопок препаратов, у аптеки — остаток / продали / дозаказ по каждому препарату, готовые фразы комментария, договорённость с прошлого визита переносится сама.
-- **План дня из шаблона.** В Excel руководитель заранее вписывает, куда идти; приложение показывает план с отметками «был / не был», а «+» у пункта плана открывает визит с уже заполненным ЛПУ.
-- **Отчёт одной кнопкой.** Сервер собирает файл из оригинала шаблона и визитов месяца, телефон открывает системное «Поделиться» → WhatsApp. Имя файла — исходное.
-- **Предпросмотр отчёта** по дням — ровно те строки, что будут в Excel, без отправки файла себе.
-- **Без сети.** Визиты пишутся в память телефона и уходят на сервер, когда появится связь; на экране всегда видно, всё ли отправлено.
-- **Поиск** по дню, месяцу или всем визитам (ФИО, ЛПУ, адрес, телефон по цифрам), фильтры и сортировка.
-- **Загрузка уже заполненного месяца** из Excel: прошлые визиты и справочник подтягиваются из файла.
-- **Приглашения коллег** — регистрация только по одноразовой ссылке.
+- **Doctor and pharmacy visits.** Autofill from a directory by name (clinic, address, specialty, phone), six product buttons, per-product stock / sold / reorder for pharmacies, quick comment phrases; the agreement from the previous visit carries over automatically.
+- **Day plan from the template.** The manager pre-fills where to go in the Excel file; the app shows the plan with visited / not visited marks, and "+" on a plan item opens a visit with the clinic already filled in.
+- **One-tap report.** The server builds the file from the original template and the month's visits; the phone opens the system share sheet → WhatsApp. The file name stays exactly as received.
+- **Report preview** per day — exactly the rows that will end up in Excel, without sending the file to yourself.
+- **Offline.** Visits are written to the phone's storage and sync when a connection appears; the screen always shows whether everything has been sent.
+- **Search** within a day, a month or all visits (name, clinic, address, phone by digits), with filters and sorting.
+- **Importing an already filled month** from Excel: past visits and the directory are pulled from the file.
+- **Invite-only sign-up** with one-time links.
 
-## Стек
+## Engineering highlights
 
-| Часть | Технологии |
+- **Filling a third-party Excel template without breaking it.** Libraries like exceljs re-save the whole workbook and lose external links, renumber styles and leave broken defined names — Excel then offers to "repair" the file. Instead, the xlsx is opened as a zip (JSZip) and only the visits sheet XML is edited: values go into existing empty cells, keeping their style. When a day has more visits than rows, rows are inserted the way Excel does it — shifting cell references, merges, autofilter, selection and workbook defined names. Verified with Excel automation, which fails on a corrupted file.
+- **Placement algorithm.** Visits are laid out like a human would fill the plan: planned places first into their own row groups, then unplanned ones into spare rows, then into untouched plan groups, and only then new rows. A "place" is name + address with typo-tolerant street matching (Levenshtein), so branches of a pharmacy chain are not mixed up.
+- **Offline-first sync.** Every change goes to IndexedDB first, then a persistent outbox sends it in order; an operation is removed only after the server responds. Last-write-wins by device timestamp, soft deletes (an old edit can't resurrect a deleted visit), idempotent client-generated IDs.
+- **Auth.** httpOnly + SameSite=Strict cookies, short-lived access JWT, rotating opaque refresh tokens stored as hashes, with **reuse detection**: a replayed refresh token revokes all of the user's sessions. The client performs a single refresh for all parallel requests, so the rotation never logs the user out by mistake.
+- **Android wrapper.** Chrome on Android refuses to share `.xlsx` via the Web Share API (`NotAllowedError`), so a thin Capacitor app uses the native share sheet and a custom plugin to receive the template from WhatsApp. The wrapper loads the production site, so frontend updates ship without reinstalling.
+- **CI/CD.** Type checks, lint and tests → multi-arch (amd64 + arm64) Docker images in GHCR → SSH deploy with a health check; signed APK builds to GitHub Releases; nightly database backups with a restore check.
+
+## Tech stack
+
+| Part | Technologies |
 |---|---|
-| Бэкенд | NestJS 11, TypeScript, Prisma 6, PostgreSQL 16, JSZip (Excel), class-validator, JWT + bcrypt |
-| Фронтенд | React 19, Vite 8, Mantine 9, TanStack Query 5, React Router 7, IndexedDB (`idb`), PWA (vite-plugin-pwa, свой service worker на Workbox) |
-| Android | Capacitor 8 — нативная обёртка над сайтом (Share, Filesystem, свой плагин приёма файлов) |
-| Инфраструктура | Docker, Caddy (HTTPS, reverse proxy), GitHub Actions (CI/CD, образы в GHCR, сборка и подпись APK), ежедневные бэкапы `pg_dump` |
-| Качество | Jest (74 теста логики отчёта, импорта и раскладки), ESLint, oxlint, Prettier, строгий TypeScript |
+| Backend | NestJS 11, TypeScript, Prisma 6, PostgreSQL 16, JSZip (Excel), class-validator, JWT + bcrypt |
+| Frontend | React 19, Vite 8, Mantine 9, TanStack Query 5, React Router 7, IndexedDB (`idb`), PWA (vite-plugin-pwa, custom Workbox service worker) |
+| Android | Capacitor 8 — native wrapper around the site (Share, Filesystem, custom file-receiving plugin) |
+| Infrastructure | Docker, Caddy (HTTPS, reverse proxy), GitHub Actions (CI/CD, images in GHCR, APK build and signing), nightly `pg_dump` backups |
+| Quality | Jest (74 tests for report, import and placement logic), ESLint, oxlint, Prettier, strict TypeScript |
 
-## Архитектура
+## Architecture
 
 ```mermaid
 flowchart LR
-  subgraph Phone["Телефон (APK / PWA)"]
-    UI["React-приложение"] --> IDB[("IndexedDB<br/>визиты, очередь,<br/>справочник")]
-    IDB --> Sync["Синхронизация<br/>(outbox)"]
+  subgraph Phone["Phone (APK / PWA)"]
+    UI["React app"] --> IDB[("IndexedDB<br/>visits, outbox,<br/>directory")]
+    IDB --> Sync["Sync<br/>(outbox)"]
   end
   Sync -- "HTTPS /api" --> Caddy
-  subgraph Server["Сервер (Docker)"]
-    Caddy["Caddy<br/>HTTPS, статика"] --> API["NestJS API"]
+  subgraph Server["Server (Docker)"]
+    Caddy["Caddy<br/>HTTPS, static files"] --> API["NestJS API"]
     API --> PG[("PostgreSQL")]
-    API --> XLSX["Сборка Excel<br/>(JSZip, правка XML листа)"]
+    API --> XLSX["Excel builder<br/>(JSZip, sheet XML edits)"]
   end
-  CI["GitHub Actions"] -- "образы ghcr.io<br/>+ выкладка по SSH" --> Server
-  CI -- "подписанный APK" --> Releases["GitHub Releases"]
+  CI["GitHub Actions"] -- "ghcr.io images<br/>+ SSH deploy" --> Server
+  CI -- "signed APK" --> Releases["GitHub Releases"]
 ```
 
-Подробно:
+In-depth documentation (in Russian):
 
-- [Архитектура и модель данных](docs/architecture.md)
-- [Отчёт в Excel: как заполняется чужой шаблон, не ломая файл](docs/excel-report.md)
-- [Работа без интернета и синхронизация](docs/offline.md)
-- [Авторизация и безопасность](docs/auth.md)
-- [Android-приложение](docs/android.md)
+- [Architecture and data model](docs/architecture.md)
+- [Excel report: filling a third-party template without breaking it](docs/excel-report.md)
+- [Offline mode and sync](docs/offline.md)
+- [Auth and security](docs/auth.md)
+- [Android app](docs/android.md)
 - [CI/CD](docs/ci-cd.md)
-- [Локальная разработка](docs/development.md)
-- [Развёртывание на сервер](deploy/README.md)
+- [Local development](docs/development.md)
+- [Server deployment](deploy/README.md)
 
-## Быстрый старт
+## Quick start
 
-Нужны Node.js 22 и Docker.
+Requires Node.js 22 and Docker.
 
 ```bash
 cp .env.example .env
-docker compose up -d                  # PostgreSQL на порту 5434
+docker compose up -d                  # PostgreSQL on port 5434
 
 cd backend
 cp .env.example .env
 npm ci
 npx prisma migrate deploy
-npm run user:create -- admin 'пароль-от-8-символов' "Иванов Иван" --admin
-npm run start:dev                     # API на http://localhost:3000/api
+npm run user:create -- admin 'password-8-chars-min' "Ivan Ivanov" --admin
+npm run start:dev                     # API at http://localhost:3000/api
 
 cd ../frontend
 npm ci
 npm run dev                           # http://localhost:5173
 ```
 
-Подробнее — в [docs/development.md](docs/development.md).
+More in [docs/development.md](docs/development.md) (in Russian).
 
-## Структура
+## Project structure
 
 ```
 backend/            NestJS API
-  prisma/           схема и миграции
-  src/auth          вход, сессии, приглашения
-  src/visits        визиты, офлайн-синхронизация, поиск
-  src/directory     справочник ЛПУ, аптек, врачей
-  src/templates     загрузка шаблона и импорт заполненных строк
-  src/report        сборка отчёта, раскладка по строкам, предпросмотр
-frontend/           React-приложение (PWA)
-  src/offline       IndexedDB, очередь отправки, синхронизация
+  prisma/           schema and migrations
+  src/auth          sign-in, sessions, invites
+  src/visits        visits, offline sync, search
+  src/directory     directory of clinics, pharmacies, doctors
+  src/templates     template upload and import of filled rows
+  src/report        report building, row placement, preview
+frontend/           React app (PWA)
+  src/offline       IndexedDB, outbox, sync
   src/sw            service worker
-  android/          Capacitor-проект Android
-deploy/             docker-compose для сервера, Caddy, бэкапы
-.github/workflows/  CI/CD: проверки, образы, выкладка, сборка APK
+  android/          Capacitor Android project
+deploy/             server docker-compose, Caddy, backups
+.github/workflows/  CI/CD: checks, images, deploy, APK build
 ```
