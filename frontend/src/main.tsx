@@ -20,7 +20,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import { UnauthorizedError } from './api/client';
-import { keys } from './api/queries';
+import { invalidateReportChecks, keys } from './api/queries';
 import { App } from './App';
 import { onLocalChange } from './offline/sync';
 
@@ -71,7 +71,7 @@ onLocalChange(({ serverChanged }) => {
   void queryClient.invalidateQueries({ queryKey: keys.local });
   if (serverChanged) {
     void queryClient.invalidateQueries({ queryKey: ['plan'] });
-    void queryClient.invalidateQueries({ queryKey: ['report'] });
+    void invalidateReportChecks(queryClient);
   }
 });
 

@@ -83,6 +83,16 @@ test('отчёт: повторный заход не качает файл за�
   await expect(send).toBeEnabled();
   expect(fileRequests).toBe(1);
 
+  // фоновая синхронизация (раз в 2 минуты, при появлении сети): проверка
+  // повторяется, а файл той же версии — нет
+  const recheck = page.waitForResponse((r) =>
+    r.url().endsWith(`/api/reports/${month}/check`),
+  );
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await recheck;
+  await expect(send).toBeEnabled();
+  expect(fileRequests).toBe(1);
+
   // новый визит на сервере (как с другого устройства) — новая версия
   const name = unique('Версионный Иван');
   const id = `e2e-${Date.now().toString(36)}`;

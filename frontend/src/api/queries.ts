@@ -1,5 +1,6 @@
 import {
   keepPreviousData,
+  type QueryClient,
   useMutation,
   useQuery,
   useQueryClient,
@@ -319,10 +320,22 @@ export function useUploadTemplate() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: keys.templates });
       void qc.invalidateQueries({ queryKey: ['plan'] });
-      void qc.invalidateQueries({ queryKey: ['report'] });
+      void invalidateReportChecks(qc);
     },
   });
 }
+
+/**
+ * Сбросить проверки отчёта, но не скачанные файлы: файл хранится под версией,
+ * и если данные изменились, проверка вернёт новую версию — новый ключ, файл
+ * скачается сам. Сброс файла заставил бы качать его заново при каждой
+ * фоновой синхронизации, даже когда ничего не менялось.
+ */
+export const invalidateReportChecks = (qc: QueryClient) =>
+  qc.invalidateQueries({
+    queryKey: ['report'],
+    predicate: (q) => q.queryKey[2] !== 'file',
+  });
 
 export const useReportCheck = (month: string, enabled: boolean) =>
   useQuery({
