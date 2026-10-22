@@ -10,6 +10,7 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
+import { ApiCookieAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, type AuthUser } from '../auth/current-user.decorator';
 import {
   CreateContactDto,
@@ -21,6 +22,8 @@ import {
 } from './directory.dto';
 import { DirectoryService } from './directory.service';
 
+@ApiTags('directory')
+@ApiCookieAuth()
 @Controller('places')
 export class PlacesController {
   constructor(private readonly directory: DirectoryService) {}

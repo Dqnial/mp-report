@@ -1,0 +1,15 @@
+{
+  "name": "mp-report-e2e",
+  "private": true,
+  "description": "Сквозные тесты Playwright: вход, визит, офлайн, шаблон и отчёт, лимит входа",
+  "scripts": {
+    "test": "playwright test",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.0",
+    "@types/node": "22.19.1",
+    "jszip": "3.10.1",
+    "typescript": "5.9.3"
+  }
+}

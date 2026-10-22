@@ -1,11 +1,17 @@
+import { InjectQueue } from '@nestjs/bullmq';
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import type { Queue } from 'bullmq';
 import { fromIsoDate, monthRange } from '../common/dates';
 import { DirectoryService } from '../directory/directory.service';
+import { quietRedisErrors } from '../redis/quiet-errors';
+import { RedisService } from '../redis/redis.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   readFilledRows,
@@ -19,57 +25,157 @@ type Tx = Prisma.TransactionClient;
 /** clientId визитов, созданных импортом (у визитов с телефона — свой формат). */
 const IMPORTED_PREFIX = 'tpl:';
 
+/** Очередь фонового импорта строк шаблона (BullMQ). */
+export const TEMPLATE_QUEUE = 'templates';
+
+export interface ImportJobData {
+  userId: string;
+  month: string;
+}
+
+export interface ImportCounts {
+  created: number;
+  linked: number;
+}
+
+/** Как идёт импорт: сразу (без Redis) или задачей в очереди. */
+export type ImportStatus =
+  ({ status: 'done' } & ImportCounts) | { status: 'queued'; jobId: string };
+
+/** Сколько ждём постановки в очередь, прежде чем импортировать прямо в запросе. */
+const ENQUEUE_TIMEOUT_MS = 2_000;
+
+const withTimeout = <T>(p: Promise<T>, ms: number) =>
+  Promise.race([
+    p,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`нет ответа за ${ms} мс`)), ms),
+    ),
+  ]);
+
 /** Шаблоны месяца от руководителя. Файл храним байт в байт, как пришёл. */
 @Injectable()
 export class TemplatesService {
+  private readonly logger = new Logger('Templates');
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly directory: DirectoryService,
-  ) {}
+    // без REDIS_URL очередь не подключена — импорт идёт прямо в запросе
+    @Optional()
+    @InjectQueue(TEMPLATE_QUEUE)
+    private readonly queue?: Queue<ImportJobData, ImportCounts>,
+    @Optional() private readonly redis?: RedisService,
+  ) {
+    this.queue?.on('error', quietRedisErrors(this.logger, 'очередь импорта'));
+  }
 
   /**
    * Месяц определяем по датам в шаблоне. Повторная загрузка заменяет файл.
-   * Уже заполненные строки становятся визитами «из файла» (см. importRows).
+   *
+   * Файл проверяем и сохраняем сразу (ошибки формата — пользователю в ответ),
+   * а уже заполненные строки превращаем в визиты «из файла» фоновой задачей:
+   * это сотни запросов к базе, держать ради них HTTP-запрос незачем. Нет
+   * очереди (Redis не настроен или недоступен) — импортируем здесь же.
    */
   async upload(userId: string, originalName: string, file: Buffer) {
-    let parsed: Awaited<ReturnType<typeof readFilledRows>>;
-    try {
-      parsed = await readFilledRows(file);
-    } catch (e) {
-      if (e instanceof TemplateFormatError) {
-        throw new BadRequestException(e.message);
-      }
-      throw e;
-    }
-    const { month, days, sheetName, filled } = parsed;
+    const { month, days, sheetName, filled } = await parseTemplate(file);
+    const data = { originalName, file: new Uint8Array(file) };
+    const saved = await this.prisma.template.upsert({
+      where: { userId_month: { userId, month } },
+      create: { ...data, userId, month },
+      update: { ...data, createdAt: new Date() },
+      select: { id: true, month: true, originalName: true, createdAt: true },
+    });
+    const importStatus = await this.startImport(userId, month, filled);
+    return {
+      ...saved,
+      sheetName,
+      days: days.length,
+      firstDay: days[0]?.date,
+      lastDay: days.at(-1)?.date,
+      import: importStatus,
+      // как раньше — когда импорт уже прошёл
+      ...(importStatus.status === 'done' && {
+        imported: {
+          created: importStatus.created,
+          linked: importStatus.linked,
+        },
+      }),
+    };
+  }
 
+  private async startImport(
+    userId: string,
+    month: string,
+    filled: FilledRow[],
+  ): Promise<ImportStatus> {
+    // Redis заведомо недоступен — не ждём таймаута постановки в очередь
+    if (this.queue && this.redis?.ready) {
+      try {
+        const job = await withTimeout(
+          this.queue.add(
+            'import',
+            { userId, month },
+            {
+              attempts: 3,
+              backoff: { type: 'exponential', delay: 2_000 },
+              removeOnComplete: { age: 3_600, count: 200 },
+              removeOnFail: { age: 7 * 24 * 3_600 },
+            },
+          ),
+          ENQUEUE_TIMEOUT_MS,
+        );
+        return { status: 'queued', jobId: job.id! };
+      } catch (e) {
+        // импорт идемпотентен: если задача всё же доедет до очереди позже,
+        // она просто перечитает те же строки
+        this.logger.warn(
+          `очередь недоступна (${(e as Error).message}) — импортирую сразу`,
+        );
+      }
+    }
+    return {
+      status: 'done',
+      ...(await this.importFilled(userId, month, filled)),
+    };
+  }
+
+  /**
+   * Задача очереди: перечитать сохранённый файл месяца и импортировать строки.
+   * Идемпотентна — повтор (retry, двойная постановка) даёт тот же результат.
+   */
+  async importStored(userId: string, month: string) {
+    const t = await this.get(userId, month);
+    const { filled } = await parseTemplate(t.file);
+    return this.importFilled(userId, month, filled);
+  }
+
+  private importFilled(userId: string, month: string, filled: FilledRow[]) {
     return this.prisma.$transaction(
-      async (tx) => {
-        const data = { originalName, file: new Uint8Array(file) };
-        const saved = await tx.template.upsert({
-          where: { userId_month: { userId, month } },
-          create: { ...data, userId, month },
-          update: { ...data, createdAt: new Date() },
-          select: {
-            id: true,
-            month: true,
-            originalName: true,
-            createdAt: true,
-          },
-        });
-        const imported = await this.importRows(tx, userId, month, filled);
-        return {
-          ...saved,
-          sheetName,
-          days: days.length,
-          firstDay: days[0]?.date,
-          lastDay: days.at(-1)?.date,
-          imported,
-        };
-      },
+      (tx) => this.importRows(tx, userId, month, filled),
       // сотни строк × несколько запросов на справочник
       { timeout: 60_000 },
     );
+  }
+
+  /** Состояние фонового импорта — только своего. */
+  async importStatus(userId: string, jobId: string) {
+    const job = this.queue && (await this.queue.getJob(jobId));
+    if (!job || job.data.userId !== userId) {
+      throw new NotFoundException('Задача импорта не найдена');
+    }
+    const state = await job.getState();
+    if (state === 'completed') {
+      return { status: 'done' as const, ...job.returnvalue };
+    }
+    if (state === 'failed') {
+      return {
+        status: 'failed' as const,
+        error: job.failedReason ?? 'не удалось прочитать строки файла',
+      };
+    }
+    return { status: 'queued' as const, state, attempts: job.attemptsMade };
   }
 
   /**
@@ -87,7 +193,7 @@ export class TemplatesService {
     userId: string,
     month: string,
     rows: FilledRow[],
-  ) {
+  ): Promise<ImportCounts> {
     const { from, to } = monthRange(month);
     const inMonth = { userId, date: { gte: from, lt: to } };
     await this.forgetFileRows(tx, userId, month);
@@ -187,5 +293,17 @@ export class TemplatesService {
       }
       await this.forgetFileRows(tx, userId, month);
     });
+  }
+}
+
+/** Разбор файла; ошибки формата — 400 с понятным текстом. */
+async function parseTemplate(file: Buffer) {
+  try {
+    return await readFilledRows(file);
+  } catch (e) {
+    if (e instanceof TemplateFormatError) {
+      throw new BadRequestException(e.message);
+    }
+    throw e;
   }
 }

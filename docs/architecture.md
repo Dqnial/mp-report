@@ -14,8 +14,9 @@ flowchart TB
   Sync -- "HTTPS, куки" --> Caddy
   subgraph Server["Сервер: docker compose"]
     Caddy["web: Caddy<br/>HTTPS, статика фронта, /api → backend"]
-    Caddy --> Nest["backend: NestJS"]
+    Caddy --> Nest["backend: NestJS<br/>+ воркеры BullMQ"]
     Nest --> PG[("db: PostgreSQL 16")]
+    Nest --> RD[("redis: очереди,<br/>лимит входа, кеш")]
   end
 ```
 
@@ -33,9 +34,13 @@ flowchart TB
 | `visits` | CRUD визитов, офлайн-синхронизация (`PUT/DELETE /visits/sync/:clientId`), поиск по всем месяцам |
 | `directory` | справочник ЛПУ, аптек, врачей и провизоров; пополняется каждым визитом |
 | `templates` | загрузка Excel-шаблона месяца, импорт уже заполненных строк в визиты |
-| `report` | раскладка визитов по строкам, сборка xlsx, предпросмотр дня, план дня |
+| `report` | раскладка визитов по строкам, сборка xlsx, предпросмотр дня, план дня, кеш готового отчёта |
+| `redis` | общее подключение к Redis с запасным режимом (приложение работает и без Redis) |
+| `maintenance` | ночная уборка по расписанию (BullMQ): истёкшие сессии и приглашения |
 | `common` | даты, пайпы, сравнение мест (название + адрес) |
 | `prisma` | доступ к базе |
+
+Redis, очереди BullMQ, лимит попыток входа и кеш отчёта — [redis-queues.md](redis-queues.md). Документация API (Swagger/OpenAPI) — `/api/docs` (в проде по умолчанию выключена, `SWAGGER=true`), схемы DTO строит плагин `@nestjs/swagger` при сборке.
 
 Ключевые файлы:
 
@@ -109,8 +114,10 @@ erDiagram
 | `PUT /visits/sync/:clientId`, `DELETE /visits/sync/:clientId` | офлайн-синхронизация: создать/обновить, мягко удалить |
 | `GET /visits/search?q=` | поиск по всем месяцам |
 | `GET /directory` | весь справочник — для подсказок без сети |
-| `POST /templates`, `GET /templates`, `DELETE /templates/:month` | шаблоны месяцев |
+| `POST /templates`, `GET /templates`, `DELETE /templates/:month` | шаблоны месяцев; импорт строк файла — фоновой задачей |
+| `GET /templates/import/:jobId` | состояние фонового импорта строк файла |
 | `GET /plan?date=` | план дня из шаблона с отметками «занято» |
 | `GET /reports/:month/check` | сколько визитов попадёт в файл, предупреждения |
 | `GET /reports/:month` | готовый xlsx под исходным именем |
 | `GET /reports/preview?date=` | строки дня как в готовом файле |
+| `GET /docs` | Swagger UI (OpenAPI), `/api/docs-json` — схема |

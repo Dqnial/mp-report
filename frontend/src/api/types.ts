@@ -76,12 +76,29 @@ export interface TemplateSummary {
   createdAt: string;
 }
 
+export interface ImportCounts {
+  created: number;
+  linked: number;
+}
+
+/** Импорт строк файла: сразу (сервер без Redis) или фоновой задачей. */
+export type ImportStatus =
+  ({ status: 'done' } & ImportCounts) | { status: 'queued'; jobId: string };
+
+/** GET /templates/import/:jobId */
+export type ImportJobStatus =
+  | ({ status: 'done' } & ImportCounts)
+  | { status: 'queued'; state: string; attempts: number }
+  | { status: 'failed'; error: string };
+
 export interface TemplateUploaded extends TemplateSummary {
   sheetName: string;
   days: number;
   firstDay?: string;
   lastDay?: string;
-  imported: { created: number; linked: number };
+  import?: ImportStatus;
+  /** есть, когда импорт уже прошёл в самом запросе */
+  imported?: ImportCounts;
 }
 
 /** Строка дня в готовом файле — экран «Предпросмотр». */

@@ -9,7 +9,12 @@
 // правки и удаления с других устройств. Визиты с неотправленными
 // изменениями при этом не трогаем — местная версия главнее, пока не уйдёт.
 import { api, ApiError, apiFetch, UnauthorizedError } from '../api/client';
-import type { TemplateUploaded, Visit } from '../api/types';
+import type {
+  ImportCounts,
+  ImportJobStatus,
+  TemplateUploaded,
+  Visit,
+} from '../api/types';
 import { monthOf, todayIso } from '../dates';
 import {
   db,
@@ -304,8 +309,48 @@ async function send(op: OutboxOp) {
 }
 
 /** Применить ответ сервера к памяти телефона, если новых правок нет. */
+/**
+ * Дождаться импорта строк загруженного шаблона. Сервер с Redis импортирует
+ * их фоновой задачей — опрашиваем её; без Redis импорт уже прошёл в запросе.
+ * null — ещё идёт (визиты подтянутся при следующей синхронизации).
+ */
+export async function waitForImport(
+  upload: TemplateUploaded,
+  timeoutMs = 120_000,
+): Promise<ImportCounts | null> {
+  const imp = upload.import;
+  if (!imp) return upload.imported ?? null;
+  if (imp.status === 'done')
+    return { created: imp.created, linked: imp.linked };
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 700));
+    const s = await api.get<ImportJobStatus>(
+      `/templates/import/${encodeURIComponent(imp.jobId)}`,
+    );
+    if (s.status === 'done') return { created: s.created, linked: s.linked };
+    if (s.status === 'failed') {
+      throw new Error(`Строки из файла не прочитались: ${s.error}`);
+    }
+  }
+  return null;
+}
+
+/** Шаблон ушёл из очереди телефона: дождаться импорта и забрать визиты месяца. */
+async function afterQueuedTemplate(upload: TemplateUploaded) {
+  try {
+    await waitForImport(upload);
+  } finally {
+    await Promise.all([pullMonth(upload.month), refreshDirectory()]);
+  }
+}
+
 async function applyResult(op: OutboxOp, result: unknown) {
-  if (op.type === 'template' || !userId) return;
+  if (op.type === 'template') {
+    void afterQueuedTemplate(result as TemplateUploaded).catch(() => {});
+    return;
+  }
+  if (!userId) return;
   const d = await db();
   const later = (await d.getAllFromIndex('outbox', 'by-user', userId)).some(
     (o) => o.clientId === op.clientId && o.type !== 'template',

@@ -7,10 +7,13 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
+import { ApiCookieAuth, ApiTags } from '@nestjs/swagger';
 import { AdminGuard } from '../auth/admin.guard';
 import { CurrentUser, type AuthUser } from '../auth/current-user.decorator';
 import { InvitesService } from './invites.service';
 
+@ApiTags('invites')
+@ApiCookieAuth()
 @Controller('invites')
 @UseGuards(AdminGuard)
 export class InvitesController {

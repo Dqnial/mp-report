@@ -45,17 +45,19 @@
 - **Offline-first синхронизация.** Любое изменение сначала пишется в IndexedDB, затем постоянная очередь отправляет его по порядку; операция удаляется только после ответа сервера. «Последняя правка побеждает» по времени устройства, мягкое удаление (старая правка не воскрешает удалённый визит), идемпотентные идентификаторы с телефона.
 - **Авторизация.** Куки httpOnly + SameSite=Strict, короткий access JWT, ротируемые непрозрачные refresh-токены, хранящиеся хешами, с **обнаружением повторного использования**: переигранный refresh отзывает все сессии пользователя. Клиент делает одно обновление на все параллельные запросы, поэтому ротация никогда не разлогинивает по ошибке.
 - **Android-обёртка.** Chrome на Android не даёт делиться `.xlsx` через Web Share API (`NotAllowedError`), поэтому тонкое приложение на Capacitor использует системное «Поделиться» и свой плагин для приёма шаблона из WhatsApp. Обёртка открывает рабочий сайт, так что обновления фронта приходят без переустановки.
-- **CI/CD.** Типы, линтер и тесты → Docker-образы под amd64 и arm64 в GHCR → выкладка по SSH с проверкой здоровья; подписанный APK в GitHub Releases; ночные бэкапы базы с проверкой восстановления.
+- **Redis, очереди и кеш — с запасным режимом.** Импорт шаблона — задача BullMQ (3 попытки с экспоненциальной паузой, идемпотентна, статус опрашивается); ночная уборка — по расписанию BullMQ. Вход ограничен (5 попыток в минуту с IP, затем пауза 5 минут), счётчики в Redis. Готовый отчёт кешируется с **версией в ключе** (загрузка шаблона + число визитов + последняя правка + хеш сборки) — устаревший отчёт отдать невозможно, сбрасывать кеш вручную не нужно. Redis упал — всё работает: импорт в запросе, лимит в памяти, без кеша; проверено остановкой Redis посреди работы. BullMQ, а не RabbitMQ, — осознанно: один сервис, Redis уже есть, ~10 МБ вместо ~150 МБ на сервере с 1 ГБ.
+- **Тесты.** 87 юнит-тестов (раскладка, вставка строк в Excel, разбор импорта, запасные режимы Redis, пути очереди) и 8 сквозных тестов Playwright на настоящем стеке (Postgres + Redis + API + собранный фронт): вход и лимит попыток, визит до сервера, офлайн и синхронизация, поиск, шаблон → план дня → предпросмотр → xlsx.
+- **CI/CD.** Типы, линтер, юнит-тесты и E2E на сервисах GitHub Actions → Docker-образы под amd64 и arm64 в GHCR → выкладка по SSH с проверкой здоровья; подписанный APK в GitHub Releases; ночные бэкапы базы с проверкой восстановления; документация API в Swagger.
 
 ## Стек
 
 | Часть | Технологии |
 |---|---|
-| Бэкенд | NestJS 11, TypeScript, Prisma 6, PostgreSQL 16, JSZip (Excel), class-validator, JWT + bcrypt |
+| Бэкенд | NestJS 11, TypeScript, Prisma 6, PostgreSQL 16, Redis 7, BullMQ, `@nestjs/throttler`, JSZip (Excel), class-validator, JWT + bcrypt, Swagger (OpenAPI) |
 | Фронтенд | React 19, Vite 8, Mantine 9, TanStack Query 5, React Router 7, IndexedDB (`idb`), PWA (vite-plugin-pwa, свой service worker на Workbox) |
 | Android | Capacitor 8 — нативная обёртка над сайтом (Share, Filesystem, свой плагин приёма файлов) |
 | Инфраструктура | Docker, Caddy (HTTPS, reverse proxy), GitHub Actions (CI/CD, образы в GHCR, сборка и подпись APK), ежедневные бэкапы `pg_dump` |
-| Качество | Jest (74 теста логики отчёта, импорта и раскладки), ESLint, oxlint, Prettier, строгий TypeScript |
+| Качество | Jest (87 юнит-тестов), Playwright (8 сквозных тестов на настоящем стеке), ESLint, oxlint, Prettier, строгий TypeScript |
 
 ## Архитектура
 
@@ -67,8 +69,9 @@ flowchart LR
   end
   Sync -- "HTTPS /api" --> Caddy
   subgraph Server["Сервер (Docker)"]
-    Caddy["Caddy<br/>HTTPS, статика"] --> API["NestJS API"]
+    Caddy["Caddy<br/>HTTPS, статика"] --> API["NestJS API<br/>+ воркеры BullMQ"]
     API --> PG[("PostgreSQL")]
+    API --> RD[("Redis<br/>очереди, лимит, кеш")]
     API --> XLSX["Сборка Excel<br/>(JSZip, правка XML листа)"]
   end
   CI["GitHub Actions"] -- "образы ghcr.io<br/>+ выкладка по SSH" --> Server
@@ -82,6 +85,7 @@ flowchart LR
 - [Работа без интернета и синхронизация](docs/offline.md)
 - [Авторизация и безопасность](docs/auth.md)
 - [Android-приложение](docs/android.md)
+- [Redis, очереди и кеш](docs/redis-queues.md)
 - [CI/CD](docs/ci-cd.md)
 - [Локальная разработка](docs/development.md)
 - [Развёртывание на сервер](deploy/README.md)
@@ -92,7 +96,7 @@ flowchart LR
 
 ```bash
 cp .env.example .env
-docker compose up -d                  # PostgreSQL на порту 5434
+docker compose up -d                  # PostgreSQL на порту 5434, Redis на 6380
 
 cd backend
 cp .env.example .env
@@ -106,7 +110,9 @@ npm ci
 npm run dev                           # http://localhost:5173
 ```
 
-Подробнее — в [docs/development.md](docs/development.md).
+Документация API (Swagger): http://localhost:3000/api/docs. Сквозные тесты и подробности — в [docs/development.md](docs/development.md).
+
+<img src="docs/screenshots/swagger.png" width="640" alt="Swagger UI">
 
 ## Структура
 
@@ -117,11 +123,14 @@ backend/            NestJS API
   src/visits        визиты, офлайн-синхронизация, поиск
   src/directory     справочник ЛПУ, аптек, врачей
   src/templates     загрузка шаблона и импорт заполненных строк
-  src/report        сборка отчёта, раскладка по строкам, предпросмотр
+  src/report        сборка отчёта, раскладка по строкам, предпросмотр, кеш отчёта
+  src/redis         подключение к Redis с запасным режимом
+  src/maintenance   уборка по расписанию (BullMQ)
 frontend/           React-приложение (PWA)
   src/offline       IndexedDB, очередь отправки, синхронизация
   src/sw            service worker
   android/          Capacitor-проект Android
+e2e/                сквозные тесты Playwright
 deploy/             docker-compose для сервера, Caddy, бэкапы
 .github/workflows/  CI/CD: проверки, образы, выкладка, сборка APK
 ```

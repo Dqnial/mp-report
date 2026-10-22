@@ -1,54 +1,28 @@
 import { OmitType, PartialType } from '@nestjs/mapped-types';
 import { VisitKind } from '@prisma/client';
+import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
   IsEnum,
-  IsIn,
-  IsInt,
   IsISO8601,
   IsOptional,
   IsString,
   Matches,
-  Max,
   MaxLength,
   MinLength,
-  Min,
   ValidateNested,
 } from 'class-validator';
 import { DATE_RE, MONTH_RE } from '../common/dates';
 import { Clean } from '../common/transforms';
-import { PRODUCT_CODES, PRODUCTS, type ProductCode } from '../products';
+import { PRODUCTS, type VisitProduct } from '../products';
+import { VisitProductDto } from './visit-product.dto';
+
+export { VisitProductDto };
 
 /** clientId визитов с телефона (у импортированных из файла — свой формат tpl:…). */
 export const CLIENT_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
-
-export class VisitProductDto {
-  @IsIn(PRODUCT_CODES)
-  code!: ProductCode;
-
-  /** аптека: остаток, уп. */
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  @Max(99999)
-  stock?: number;
-
-  /** аптека: продали, уп. */
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  @Max(99999)
-  sold?: number;
-
-  /** аптека: дозаказ, уп. */
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  @Max(99999)
-  order?: number;
-}
 
 export class CreateVisitDto {
   /** генерится на телефоне: повторная отправка того же визита не создаст дубль */
@@ -97,7 +71,11 @@ export class CreateVisitDto {
   @ArrayMaxSize(PRODUCTS.length)
   @ValidateNested({ each: true })
   @Type(() => VisitProductDto)
-  products: VisitProductDto[] = [];
+  // TS-тип — интерфейс, а схема для Swagger — явно: для поля с типом-классом
+  // плагин Swagger генерирует импорт по абсолютному пути, если в пути проекта
+  // есть кириллица, и сборка ломается
+  @ApiProperty({ type: () => [VisitProductDto] })
+  products: VisitProduct[] = [];
 
   @IsOptional()
   @Clean()

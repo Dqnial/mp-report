@@ -9,6 +9,7 @@ import {
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
+import { ApiCookieAuth, ApiTags } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { CurrentUser, type AuthUser } from '../auth/current-user.decorator';
 import { MonthPipe } from '../common/month.pipe';
@@ -27,6 +28,8 @@ export function decodeUploadName(name: string) {
   return utf8.includes('�') ? name : utf8;
 }
 
+@ApiTags('templates')
+@ApiCookieAuth()
 @Controller('templates')
 export class TemplatesController {
   constructor(private readonly templates: TemplatesService) {}
@@ -46,6 +49,12 @@ export class TemplatesController {
       throw new BadRequestException('Нужен файл .xlsx');
     }
     return this.templates.upload(user.id, name, file.buffer);
+  }
+
+  /** Состояние фонового импорта строк файла (после POST /templates). */
+  @Get('import/:jobId')
+  importStatus(@CurrentUser() user: AuthUser, @Param('jobId') jobId: string) {
+    return this.templates.importStatus(user.id, jobId);
   }
 
   @Get()

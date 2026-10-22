@@ -20,6 +20,9 @@ RUN npx prisma generate
 COPY . .
 RUN npm run build
 
+# хеш коммита (из CI) — в ключе кеша отчёта; в конце, чтобы не сбивать кеш слоёв
+ARG APP_BUILD=dev
+ENV APP_BUILD=$APP_BUILD
 ENV NODE_ENV=production
 EXPOSE 3000
 

@@ -9,3 +9,10 @@ samples/
 *.xlsx
 *.dump
 
+
+# отчёты Playwright
+e2e/test-results/
+e2e/playwright-report/
+
+# сессия для сквозных тестов
+e2e/.auth/

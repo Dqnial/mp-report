@@ -54,8 +54,88 @@ jobs:
         working-directory: frontend
         run: npm ci && npm run build
 
+  # Сквозные тесты Playwright на настоящем стеке: Postgres + Redis + бэкенд +
+  # собранный фронт (vite preview проксирует /api на бэкенд)
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.15-alpine
+        env:
+          POSTGRES_USER: mp
+          POSTGRES_PASSWORD: mp
+          POSTGRES_DB: mp_report
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U mp -d mp_report"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+      redis:
+        image: redis:7.4.11-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      DATABASE_URL: postgresql://mp:mp@localhost:5432/mp_report
+      REDIS_URL: redis://localhost:6379
+      JWT_ACCESS_SECRET: e2e-only-secret
+      COOKIE_SECURE: 'false'
+      APP_URL: http://localhost:4173
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+            e2e/package-lock.json
+
+      - name: бэкенд — сборка, миграции, тестовый пользователь, запуск
+        working-directory: backend
+        run: |
+          npm ci
+          npx prisma migrate deploy
+          npm run build
+          npm run -s user:create -- e2e e2e-password-1 "Тестовый Пользователь"
+          nohup node dist/main.js > ../backend.log 2>&1 &
+
+      - name: фронт — сборка и vite preview
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+          nohup npx vite preview --port 4173 --strictPort > ../preview.log 2>&1 &
+
+      - name: ждём, пока стек ответит
+        run: |
+          for i in $(seq 1 60); do
+            [ "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:4173/api/auth/me)" = "401" ] && exit 0
+            sleep 2
+          done
+          echo "стек не поднялся"; cat backend.log preview.log; exit 1
+
+      - name: Playwright
+        working-directory: e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npx playwright test
+
+      - name: отчёт и логи при падении
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+            backend.log
+          retention-days: 7
+
   build:
-    needs: check
+    needs: [check, e2e]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -74,6 +154,9 @@ jobs:
         with:
           context: ./backend
           platforms: linux/amd64,linux/arm64
+          # версия сборки — в ключе кеша отчёта: новая логика раскладки не
+          # отдаст отчёт, собранный старой
+          build-args: APP_BUILD=${{ github.sha }}
           push: true
           tags: |
             ${{ env.IMAGE_PREFIX }}-backend:latest

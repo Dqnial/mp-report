@@ -1,6 +1,7 @@
+# Разработка: база и Redis. Версии закреплены точно — как на сервере.
 services:
   db:
-    image: postgres:16-alpine
+    image: postgres:16.15-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
@@ -11,5 +12,17 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
 
+  # очереди BullMQ, лимит попыток входа, кеш отчёта (необязателен — без него
+  # бэкенд работает в упрощённом режиме)
+  redis:
+    image: redis:7.4.11-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 64mb --maxmemory-policy noeviction
+    ports:
+      - "${REDIS_PORT:-6380}:6379"
+    volumes:
+      - redisdata:/data
+
 volumes:
   pgdata:
+  redisdata:

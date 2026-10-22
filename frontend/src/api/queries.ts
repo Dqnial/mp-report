@@ -30,6 +30,7 @@ import {
   queueTemplate,
   refreshDirectory,
   saveVisit,
+  waitForImport,
   stopSync,
   syncStatus,
   type ServerVisit,
@@ -38,6 +39,7 @@ import { api, ApiError, apiFetch, UnauthorizedError } from './client';
 import type {
   DayPlan,
   DayPreview,
+  ImportCounts,
   Invite,
   Me,
   ReportCheck,
@@ -287,15 +289,26 @@ export function useUploadTemplate() {
   return useMutation({
     mutationFn: async (
       file: File,
-    ): Promise<{ queued: true } | ({ queued: false } & TemplateUploaded)> => {
+    ): Promise<
+      | { queued: true }
+      | ({ queued: false; importPending: boolean } & TemplateUploaded & {
+            imported: ImportCounts;
+          })
+    > => {
       const fd = new FormData();
       fd.append('file', file, file.name);
       try {
         const uploaded = await api.post<TemplateUploaded>('/templates', fd);
-        // визиты из файла сервер уже прочитал — забираем их на телефон сразу,
-        // а не при следующей фоновой подгрузке (иначе они «появляются» позже)
+        // строки файла сервер читает фоновой задачей — дожидаемся её и сразу
+        // забираем визиты на телефон, а не при следующей фоновой подгрузке
+        const imported = await waitForImport(uploaded);
         await Promise.all([pullMonth(uploaded.month), refreshDirectory()]);
-        return { queued: false, ...uploaded };
+        return {
+          queued: false,
+          ...uploaded,
+          imported: imported ?? { created: 0, linked: 0 },
+          importPending: imported === null,
+        };
       } catch (e) {
         if (!isNetworkError(e)) throw e;
         await queueTemplate(file);

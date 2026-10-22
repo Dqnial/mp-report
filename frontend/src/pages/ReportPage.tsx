@@ -125,8 +125,9 @@ export function ReportPage() {
         notifications.show({
           color: 'teal',
           title: `Шаблон на ${formatMonth(t.month)} загружен`,
-          message:
-            created + linked
+          message: t.importPending
+            ? 'Визиты из файла ещё читаются — появятся на экране «Визиты» через минуту'
+            : created + linked
               ? `Из файла прочитано визитов: ${created + linked} — они уже на экране «Визиты»`
               : `Рабочих дней: ${t.days}`,
         });

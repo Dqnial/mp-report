@@ -1,4 +1,5 @@
 import { Controller, Get, Param, Query, StreamableFile } from '@nestjs/common';
+import { ApiCookieAuth, ApiTags } from '@nestjs/swagger';
 import { Matches } from 'class-validator';
 import { CurrentUser, type AuthUser } from '../auth/current-user.decorator';
 import { DATE_RE } from '../common/dates';
@@ -13,6 +14,8 @@ class PreviewQuery {
   date!: string;
 }
 
+@ApiTags('reports')
+@ApiCookieAuth()
 @Controller('reports')
 export class ReportController {
   constructor(private readonly reports: ReportService) {}

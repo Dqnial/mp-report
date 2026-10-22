@@ -45,17 +45,19 @@ The app removes the retyping: a visit is logged in about half a minute, and the 
 - **Offline-first sync.** Every change goes to IndexedDB first, then a persistent outbox sends it in order; an operation is removed only after the server responds. Last-write-wins by device timestamp, soft deletes (an old edit can't resurrect a deleted visit), idempotent client-generated IDs.
 - **Auth.** httpOnly + SameSite=Strict cookies, short-lived access JWT, rotating opaque refresh tokens stored as hashes, with **reuse detection**: a replayed refresh token revokes all of the user's sessions. The client performs a single refresh for all parallel requests, so the rotation never logs the user out by mistake.
 - **Android wrapper.** Chrome on Android refuses to share `.xlsx` via the Web Share API (`NotAllowedError`), so a thin Capacitor app uses the native share sheet and a custom plugin to receive the template from WhatsApp. The wrapper loads the production site, so frontend updates ship without reinstalling.
-- **CI/CD.** Type checks, lint and tests → multi-arch (amd64 + arm64) Docker images in GHCR → SSH deploy with a health check; signed APK builds to GitHub Releases; nightly database backups with a restore check.
+- **Redis, queues and caching — with graceful degradation.** Template import runs as a BullMQ job (3 retries with exponential backoff, idempotent, status polling); nightly cleanup runs on a BullMQ job scheduler. Login is rate-limited (5 attempts/min per IP, then a 5-minute block) with counters in Redis. The finished report is cached with **versioned keys** (template upload time + visit count + last edit + build hash), so a stale report can never be served and nothing has to be invalidated by hand. If Redis is down, everything keeps working: inline import, in-memory rate limiting, no cache — verified by stopping Redis mid-session. BullMQ over RabbitMQ on purpose: a single service, Redis already in place, ~10 MB instead of ~150 MB on a 1 GB server.
+- **Testing.** 87 unit tests (report placement, Excel row insertion, import parsing, Redis fallbacks, queue paths) and 8 Playwright end-to-end tests on the real stack (Postgres + Redis + API + built frontend): sign-in and rate limiting, a visit reaching the server, offline mode and sync, search, template → day plan → preview → xlsx.
+- **CI/CD.** Type checks, lint and unit tests, plus the E2E suite on GitHub Actions service containers → multi-arch (amd64 + arm64) Docker images in GHCR → SSH deploy with a health check; signed APK builds to GitHub Releases; nightly database backups with a restore check; OpenAPI docs via Swagger.
 
 ## Tech stack
 
 | Part | Technologies |
 |---|---|
-| Backend | NestJS 11, TypeScript, Prisma 6, PostgreSQL 16, JSZip (Excel), class-validator, JWT + bcrypt |
+| Backend | NestJS 11, TypeScript, Prisma 6, PostgreSQL 16, Redis 7, BullMQ, `@nestjs/throttler`, JSZip (Excel), class-validator, JWT + bcrypt, Swagger (OpenAPI) |
 | Frontend | React 19, Vite 8, Mantine 9, TanStack Query 5, React Router 7, IndexedDB (`idb`), PWA (vite-plugin-pwa, custom Workbox service worker) |
 | Android | Capacitor 8 — native wrapper around the site (Share, Filesystem, custom file-receiving plugin) |
 | Infrastructure | Docker, Caddy (HTTPS, reverse proxy), GitHub Actions (CI/CD, images in GHCR, APK build and signing), nightly `pg_dump` backups |
-| Quality | Jest (74 tests for report, import and placement logic), ESLint, oxlint, Prettier, strict TypeScript |
+| Quality | Jest (87 unit tests), Playwright (8 end-to-end tests on the real stack), ESLint, oxlint, Prettier, strict TypeScript |
 
 ## Architecture
 
@@ -67,8 +69,9 @@ flowchart LR
   end
   Sync -- "HTTPS /api" --> Caddy
   subgraph Server["Server (Docker)"]
-    Caddy["Caddy<br/>HTTPS, static files"] --> API["NestJS API"]
+    Caddy["Caddy<br/>HTTPS, static files"] --> API["NestJS API<br/>+ BullMQ workers"]
     API --> PG[("PostgreSQL")]
+    API --> RD[("Redis<br/>queues, rate limit, cache")]
     API --> XLSX["Excel builder<br/>(JSZip, sheet XML edits)"]
   end
   CI["GitHub Actions"] -- "ghcr.io images<br/>+ SSH deploy" --> Server
@@ -82,6 +85,7 @@ In-depth documentation (in Russian):
 - [Offline mode and sync](docs/offline.md)
 - [Auth and security](docs/auth.md)
 - [Android app](docs/android.md)
+- [Redis, queues and cache](docs/redis-queues.md)
 - [CI/CD](docs/ci-cd.md)
 - [Local development](docs/development.md)
 - [Server deployment](deploy/README.md)
@@ -92,7 +96,7 @@ Requires Node.js 22 and Docker.
 
 ```bash
 cp .env.example .env
-docker compose up -d                  # PostgreSQL on port 5434
+docker compose up -d                  # PostgreSQL on port 5434, Redis on 6380
 
 cd backend
 cp .env.example .env
@@ -106,6 +110,10 @@ npm ci
 npm run dev                           # http://localhost:5173
 ```
 
+API docs (Swagger): http://localhost:3000/api/docs. End-to-end tests: see [docs/development.md](docs/development.md#сквозные-тесты-playwright).
+
+<img src="docs/screenshots/swagger.png" width="640" alt="Swagger UI">
+
 More in [docs/development.md](docs/development.md) (in Russian).
 
 ## Project structure
@@ -117,11 +125,14 @@ backend/            NestJS API
   src/visits        visits, offline sync, search
   src/directory     directory of clinics, pharmacies, doctors
   src/templates     template upload and import of filled rows
-  src/report        report building, row placement, preview
+  src/report        report building, row placement, preview, report cache
+  src/redis         Redis connection with fallback
+  src/maintenance   scheduled cleanup (BullMQ)
 frontend/           React app (PWA)
   src/offline       IndexedDB, outbox, sync
   src/sw            service worker
   android/          Capacitor Android project
+e2e/                Playwright end-to-end tests
 deploy/             server docker-compose, Caddy, backups
 .github/workflows/  CI/CD: checks, images, deploy, APK build
 ```

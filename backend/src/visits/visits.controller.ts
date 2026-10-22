@@ -14,6 +14,7 @@ import {
   Query,
   Res,
 } from '@nestjs/common';
+import { ApiCookieAuth, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { CurrentUser, type AuthUser } from '../auth/current-user.decorator';
 import {
@@ -34,6 +35,8 @@ class ClientIdPipe implements PipeTransform<string, string> {
   }
 }
 
+@ApiTags('visits')
+@ApiCookieAuth()
 @Controller('visits')
 export class VisitsController {
   constructor(private readonly visits: VisitsService) {}

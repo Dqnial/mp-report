@@ -8,7 +8,10 @@ import {
   Post,
   Req,
   Res,
+  UseGuards,
 } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
+import { SkipThrottle, Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { ConfigService } from '@nestjs/config';
 import type { CookieOptions, Request, Response } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
@@ -25,7 +28,14 @@ import { LoginDto } from './login.dto';
 import { Public } from './public.decorator';
 import { RegisterDto } from './register.dto';
 
+/**
+ * Вход и регистрация — с ограничением попыток (против подбора пароля):
+ * лимиты «auth» по IP, см. AppModule. Обновление токена, выход и профиль
+ * вызываются приложением постоянно — их не ограничиваем.
+ */
+@ApiTags('auth')
 @Controller('auth')
+@UseGuards(ThrottlerGuard)
 export class AuthController {
   private readonly base: CookieOptions;
   private readonly accessTtlMs: number;
@@ -62,6 +72,7 @@ export class AuthController {
 
   /** Фронт проверяет ссылку до показа формы регистрации. */
   @Public()
+  @Throttle({ auth: { limit: 20, ttl: 60_000 } })
   @Get('invite/:token')
   @HttpCode(204)
   async checkInvite(@Param('token') token: string) {
@@ -83,6 +94,7 @@ export class AuthController {
   }
 
   @Public()
+  @SkipThrottle({ auth: true })
   @Post('refresh')
   @HttpCode(204)
   async refresh(
@@ -104,6 +116,7 @@ export class AuthController {
   // refresh-кука сюда не приходит (Path=/api/auth/refresh) — сессию находим
   // по sid из access-токена; истёкший, но подписанный нами токен годится
   @Public()
+  @SkipThrottle({ auth: true })
   @Post('logout')
   @HttpCode(204)
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
@@ -111,6 +124,7 @@ export class AuthController {
     this.clearCookies(res);
   }
 
+  @SkipThrottle({ auth: true })
   @Get('me')
   me(@CurrentUser() user: AuthUser) {
     return this.prisma.user.findUniqueOrThrow({

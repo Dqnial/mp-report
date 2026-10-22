@@ -10,7 +10,9 @@ name: mp-report-prod
 
 services:
   db:
-    image: postgres:16-alpine
+    # версия закреплена точно: «16-alpine» при каждой выкладке подтягивал бы
+    # новый минорный выпуск и перезапускал базу
+    image: postgres:16.15-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?нужен POSTGRES_USER в .env}
@@ -25,6 +27,21 @@ services:
       retries: 20
     # наружу порт базы НЕ открываем
 
+  # Очереди BullMQ, лимит попыток входа, кеш отчёта. Данные в Redis временные;
+  # AOF — чтобы задачи очереди пережили перезапуск. noeviction — требование BullMQ.
+  redis:
+    image: redis:7.4.11-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 64mb --maxmemory-policy noeviction
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    # наружу порт НЕ открываем
+
   backend:
     image: ghcr.io/dqnial/mp-report-backend:${IMAGE_TAG:-latest}
     build: ../backend
@@ -38,9 +55,14 @@ services:
       ACCESS_TTL_SEC: '900'
       REFRESH_TTL_DAYS: '90'
       INVITE_TTL_DAYS: '7'
+      REDIS_URL: redis://redis:6379
     depends_on:
       db:
         condition: service_healthy
+      # без Redis бэкенд тоже работает (упрощённый режим) — не ждём его
+      redis:
+        condition: service_started
+        required: false
 
   web:
     image: ghcr.io/dqnial/mp-report-web:${IMAGE_TAG:-latest}
@@ -62,5 +84,6 @@ services:
 
 volumes:
   pgdata:
+  redisdata:
   caddy_data:
   caddy_config:
