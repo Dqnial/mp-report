@@ -1,0 +1,8 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Визиты</string>
+    <string name="title_activity_main">Визиты</string>
+    <string name="package_name">kz.vizity.mpreport</string>
+    <string name="custom_url_scheme">kz.vizity.mpreport</string>
+    <string name="share_label">Визиты — загрузить шаблон</string>
+</resources>

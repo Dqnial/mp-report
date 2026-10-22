@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+*.log
+
+# персональные данные врачей — не коммитить
+# samples/ — настоящие файлы для проверок (template:check, импорт, отчёт)
+samples/
+*.xlsx
+*.dump
+

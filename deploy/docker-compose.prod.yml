@@ -1,0 +1,66 @@
+# Прод: Postgres + бэкенд + Caddy (фронт, HTTPS).
+#
+# На сервере образы НЕ собираются: их собирает GitHub Actions
+# (.github/workflows/deploy.yml) и кладёт в ghcr.io; сервер делает
+#   docker compose -f docker-compose.prod.yml pull && ... up -d --no-build
+# Локальная проверка той же конфигурации со сборкой из исходников:
+#   docker compose -f docker-compose.prod.yml up -d --build
+# Отдельное имя проекта — чтобы локальная проверка не задела базу разработки.
+name: mp-report-prod
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?нужен POSTGRES_USER в .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?нужен POSTGRES_PASSWORD в .env}
+      POSTGRES_DB: ${POSTGRES_DB:-mp_report}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    # наружу порт базы НЕ открываем
+
+  backend:
+    image: ghcr.io/dqnial/mp-report-backend:${IMAGE_TAG:-latest}
+    build: ../backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-mp_report}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?нужен JWT_ACCESS_SECRET в .env}
+      COOKIE_SECURE: 'true'
+      APP_URL: https://${DOMAIN}
+      PORT: '3000'
+      ACCESS_TTL_SEC: '900'
+      REFRESH_TTL_DAYS: '90'
+      INVITE_TTL_DAYS: '7'
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    image: ghcr.io/dqnial/mp-report-web:${IMAGE_TAG:-latest}
+    build:
+      context: ..
+      dockerfile: deploy/web.Dockerfile
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?нужен DOMAIN в .env}
+    ports:
+      - '${HTTP_PORT:-80}:80'
+      - '${HTTPS_PORT:-443}:443'
+      - '${HTTPS_PORT:-443}:443/udp'
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

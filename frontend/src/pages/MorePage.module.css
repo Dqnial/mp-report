@@ -1,0 +1,5 @@
+/* только что созданная ссылка — выделена, чтобы её не пропустить */
+.fresh {
+  border-color: var(--mantine-color-teal-4);
+  background: var(--mantine-color-teal-0);
+}

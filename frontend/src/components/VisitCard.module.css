@@ -1,0 +1,30 @@
+.card {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+
+.card[data-from-file] {
+  background: var(--mantine-color-gray-1);
+}
+
+/* значок поля — фиксированной ширины, чтобы значения стояли ровным столбцом */
+.icon {
+  flex-shrink: 0;
+  width: 20px;
+  display: flex;
+  justify-content: center;
+  padding-top: 2px;
+  color: var(--mantine-color-gray-6);
+}
+
+.value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* «нет телефона» — заметно, но спокойно: не ошибка, просто пусто */
+.missing {
+  color: var(--mantine-color-gray-5);
+  font-style: italic;
+}

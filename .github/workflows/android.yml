@@ -1,0 +1,85 @@
+# Android-приложение (APK на Capacitor) → GitHub Releases.
+#
+# APK — только обёртка: внутри открывается рабочий сайт, поэтому обычные
+# правки фронта приходят в приложение сами, без переустановки. Пересобирать
+# нужно, только когда меняется нативная часть (frontend/android, Capacitor,
+# capacitor.config.ts) или адрес сайта — это и есть триггеры ниже.
+#
+# Подпись — секреты ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD,
+# ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD. Ключ один навсегда: подписанный
+# другим ключом APK Android не поставит поверх старого.
+name: android
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - frontend/android/**
+      - frontend/capacitor.config.ts
+      - frontend/src/native.ts
+      - .github/workflows/android.yml
+  workflow_dispatch:
+
+concurrency:
+  group: android
+  cancel-in-progress: true
+
+permissions:
+  contents: write # публикация релиза
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    env:
+      # адрес сайта — переменная репозитория APP_DOMAIN (в коде его нет)
+      APP_URL: https://${{ vars.APP_DOMAIN }}
+      VERSION_CODE: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
+      - name: адрес сайта задан
+        run: test -n "${{ vars.APP_DOMAIN }}" || { echo "нет переменной APP_DOMAIN (Settings → Secrets and variables → Actions → Variables)"; exit 1; }
+
+      - name: фронт (запасные файлы внутри APK) и синхронизация Capacitor
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+          npx cap sync android
+
+      - name: ключ подписи
+        run: |
+          test -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" || { echo "нет секрета ANDROID_KEYSTORE_BASE64"; exit 1; }
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "ANDROID_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+
+      - name: сборка APK
+        working-directory: frontend/android
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+          mv app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/vizity.apk"
+          rm -f "$RUNNER_TEMP/release.jks"
+
+      - name: релиз
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "android-${{ github.run_number }}" "$RUNNER_TEMP/vizity.apk" \
+            --title "Визиты для Android, сборка ${{ github.run_number }}" \
+            --notes "Скачать vizity.apk на телефон и установить (разрешить установку из этого источника). Ставится поверх прошлой версии, данные сохраняются." \
+            --latest

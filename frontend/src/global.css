@@ -1,0 +1,27 @@
+html,
+body {
+  /* без «резинки» и синей подсветки тапа — ощущается как приложение */
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  background: var(--mantine-color-gray-0);
+}
+
+/* строка состояния (часы, батарея): в APK на новых Android страница рисуется
+   и под ней — отступаем и закрываем полосу фоном, чтобы текст не лез под часы */
+body {
+  padding-top: env(safe-area-inset-top);
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: env(safe-area-inset-top);
+  background: var(--mantine-color-body);
+  z-index: 100;
+}

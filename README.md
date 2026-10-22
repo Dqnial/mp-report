@@ -1,0 +1,116 @@
+# Визиты МП
+
+Мобильное приложение для медицинского представителя: днём быстро записывать визиты к врачам и в аптеки прямо с телефона, вечером одной кнопкой отправлять руководителю месячный отчёт в Excel — в том самом файле и формате, который прислала компания.
+
+Работает без интернета, ставится на Android как приложение, отчёт уходит в WhatsApp через системное «Поделиться».
+
+<p>
+  <img src="docs/screenshots/day-visits.png" width="200" alt="Визиты дня">
+  <img src="docs/screenshots/day-plan.png" width="200" alt="План дня">
+  <img src="docs/screenshots/visit-doctor.png" width="200" alt="Визит к врачу">
+  <img src="docs/screenshots/visit-pharmacy.png" width="200" alt="Визит в аптеку">
+</p>
+<p>
+  <img src="docs/screenshots/report.png" width="200" alt="Отчёт">
+  <img src="docs/screenshots/preview.png" width="200" alt="Предпросмотр отчёта">
+  <img src="docs/screenshots/search.png" width="200" alt="Поиск визитов">
+  <img src="docs/screenshots/login.png" width="200" alt="Вход">
+</p>
+
+*Все данные на скриншотах вымышлены.*
+
+## Зачем
+
+Типичный день медпредставителя — 20–30 визитов. Обычно их пишут в блокнот, а вечером перепечатывают в Excel-шаблон, который присылает руководитель, и отправляют файл в WhatsApp. Перепечатка занимает вечер, а шаблон менять нельзя: компания принимает только свой файл, под своим именем и в своём оформлении.
+
+Приложение убирает перепечатку: визит записывается на ходу за полминуты, а отчёт собирается сам — значения вписываются в пустые ячейки исходного файла, остальное в книге остаётся байт в байт.
+
+## Что умеет
+
+- **Визиты врачей и аптек.** Автоподстановка из справочника по ФИО (ЛПУ, адрес, специальность, телефон), шесть кнопок препаратов, у аптеки — остаток / продали / дозаказ по каждому препарату, готовые фразы комментария, договорённость с прошлого визита переносится сама.
+- **План дня из шаблона.** В Excel руководитель заранее вписывает, куда идти; приложение показывает план с отметками «был / не был», а «+» у пункта плана открывает визит с уже заполненным ЛПУ.
+- **Отчёт одной кнопкой.** Сервер собирает файл из оригинала шаблона и визитов месяца, телефон открывает системное «Поделиться» → WhatsApp. Имя файла — исходное.
+- **Предпросмотр отчёта** по дням — ровно те строки, что будут в Excel, без отправки файла себе.
+- **Без сети.** Визиты пишутся в память телефона и уходят на сервер, когда появится связь; на экране всегда видно, всё ли отправлено.
+- **Поиск** по дню, месяцу или всем визитам (ФИО, ЛПУ, адрес, телефон по цифрам), фильтры и сортировка.
+- **Загрузка уже заполненного месяца** из Excel: прошлые визиты и справочник подтягиваются из файла.
+- **Приглашения коллег** — регистрация только по одноразовой ссылке.
+
+## Стек
+
+| Часть | Технологии |
+|---|---|
+| Бэкенд | NestJS 11, TypeScript, Prisma 6, PostgreSQL 16, JSZip (Excel), class-validator, JWT + bcrypt |
+| Фронтенд | React 19, Vite 8, Mantine 9, TanStack Query 5, React Router 7, IndexedDB (`idb`), PWA (vite-plugin-pwa, свой service worker на Workbox) |
+| Android | Capacitor 8 — нативная обёртка над сайтом (Share, Filesystem, свой плагин приёма файлов) |
+| Инфраструктура | Docker, Caddy (HTTPS, reverse proxy), GitHub Actions (CI/CD, образы в GHCR, сборка и подпись APK), ежедневные бэкапы `pg_dump` |
+| Качество | Jest (74 теста логики отчёта, импорта и раскладки), ESLint, oxlint, Prettier, строгий TypeScript |
+
+## Архитектура
+
+```mermaid
+flowchart LR
+  subgraph Phone["Телефон (APK / PWA)"]
+    UI["React-приложение"] --> IDB[("IndexedDB<br/>визиты, очередь,<br/>справочник")]
+    IDB --> Sync["Синхронизация<br/>(outbox)"]
+  end
+  Sync -- "HTTPS /api" --> Caddy
+  subgraph Server["Сервер (Docker)"]
+    Caddy["Caddy<br/>HTTPS, статика"] --> API["NestJS API"]
+    API --> PG[("PostgreSQL")]
+    API --> XLSX["Сборка Excel<br/>(JSZip, правка XML листа)"]
+  end
+  CI["GitHub Actions"] -- "образы ghcr.io<br/>+ выкладка по SSH" --> Server
+  CI -- "подписанный APK" --> Releases["GitHub Releases"]
+```
+
+Подробно:
+
+- [Архитектура и модель данных](docs/architecture.md)
+- [Отчёт в Excel: как заполняется чужой шаблон, не ломая файл](docs/excel-report.md)
+- [Работа без интернета и синхронизация](docs/offline.md)
+- [Авторизация и безопасность](docs/auth.md)
+- [Android-приложение](docs/android.md)
+- [CI/CD](docs/ci-cd.md)
+- [Локальная разработка](docs/development.md)
+- [Развёртывание на сервер](deploy/README.md)
+
+## Быстрый старт
+
+Нужны Node.js 22 и Docker.
+
+```bash
+cp .env.example .env
+docker compose up -d                  # PostgreSQL на порту 5434
+
+cd backend
+cp .env.example .env
+npm ci
+npx prisma migrate deploy
+npm run user:create -- admin 'пароль-от-8-символов' "Иванов Иван" --admin
+npm run start:dev                     # API на http://localhost:3000/api
+
+cd ../frontend
+npm ci
+npm run dev                           # http://localhost:5173
+```
+
+Подробнее — в [docs/development.md](docs/development.md).
+
+## Структура
+
+```
+backend/            NestJS API
+  prisma/           схема и миграции
+  src/auth          вход, сессии, приглашения
+  src/visits        визиты, офлайн-синхронизация, поиск
+  src/directory     справочник ЛПУ, аптек, врачей
+  src/templates     загрузка шаблона и импорт заполненных строк
+  src/report        сборка отчёта, раскладка по строкам, предпросмотр
+frontend/           React-приложение (PWA)
+  src/offline       IndexedDB, очередь отправки, синхронизация
+  src/sw            service worker
+  android/          Capacitor-проект Android
+deploy/             docker-compose для сервера, Caddy, бэкапы
+.github/workflows/  CI/CD: проверки, образы, выкладка, сборка APK
+```

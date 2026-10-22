@@ -1,0 +1,11 @@
+# в репозитории — LF; скрипты и конфиги сервера — LF и в рабочей копии,
+# иначе на Linux «bash: No such file or directory»
+* text=auto
+*.sh text eol=lf
+Caddyfile text eol=lf
+*.Dockerfile text eol=lf
+Dockerfile text eol=lf
+*.xlsx binary
+gradlew text eol=lf
+*.jar binary
+*.png binary

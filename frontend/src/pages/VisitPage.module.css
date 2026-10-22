@@ -1,0 +1,65 @@
+/* препараты — во всю ширину ячейки, крупная цель для пальца */
+.chip,
+.chip :global(.mantine-Chip-label) {
+  width: 100%;
+}
+
+.chip :global(.mantine-Chip-label) {
+  justify-content: center;
+  height: 52px;
+}
+
+/* галочка не сжимается, когда название длинное («Кальциактив») */
+.chip :global(.mantine-Chip-iconWrapper) {
+  flex-shrink: 0;
+}
+
+.phrase {
+  padding: 6px 12px;
+  border-radius: var(--mantine-radius-xl);
+  background: var(--mantine-color-gray-1);
+  font-size: var(--mantine-font-size-sm);
+}
+
+.phrase:active {
+  background: var(--mantine-color-gray-3);
+}
+
+/* форма на весь экран, «Сохранить» — в конце колонки и прилипает к низу:
+   занимает своё место и не закрывает поля на любом размере экрана */
+.page {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+.content {
+  flex: 1;
+}
+
+.saveBar {
+  position: sticky;
+  bottom: 0;
+  padding: var(--mantine-spacing-sm) var(--mantine-spacing-md)
+    calc(var(--mantine-spacing-sm) + env(safe-area-inset-bottom));
+  background: var(--mantine-color-body);
+  border-top: 1px solid var(--mantine-color-gray-3);
+  z-index: 10;
+}
+
+/* переключатель «Врач / Аптека»: выбранный — белым по цвету, остальное приглушено */
+.kind {
+  border: 1px solid var(--mantine-color-gray-3);
+}
+
+.kind :global(.mantine-SegmentedControl-label) {
+  font-weight: 700;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.kind :global(.mantine-SegmentedControl-label[data-active]) {
+  color: var(--mantine-color-white);
+}

@@ -1,0 +1,58 @@
+/* колонка на весь экран: контент растягивается, панель — всегда внизу */
+.shell {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+.main {
+  flex: 1;
+  padding: var(--mantine-spacing-md) var(--mantine-spacing-md) 0;
+}
+
+.dock {
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+  background: var(--mantine-color-body);
+  border-top: 1px solid var(--mantine-color-gray-3);
+  /* полоса жестов / кнопки Android, «домой» на iPhone */
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* кнопки страницы — прозрачная полоса прямо над меню, поверх контента */
+.actions {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  padding: var(--mantine-spacing-sm) var(--mantine-spacing-md);
+  pointer-events: none;
+}
+
+.actions > * {
+  pointer-events: auto;
+}
+
+/* на страницах без своих кнопок — ничего лишнего */
+.actions:empty {
+  display: none;
+}
+
+.tabs {
+  display: flex;
+  min-height: 64px;
+}
+
+.tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 0;
+  color: var(--mantine-color-gray-6);
+}
+
+.tab[data-active] {
+  color: var(--mantine-primary-color-filled);
+}

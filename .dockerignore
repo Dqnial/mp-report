@@ -1,0 +1,9 @@
+# контекст сборки web (deploy/web.Dockerfile) — корень репозитория
+**/node_modules
+**/dist
+**/.env
+**/*.log
+.git
+samples
+*.xlsx
+backend

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Иконка «Визиты» (как public/icon.svg): планшет со списком. Координаты
+     из SVG 512×512, уменьшены и отцентрованы в безопасной зоне 108×108. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="0.18"
+        android:scaleY="0.18"
+        android:translateX="7.92"
+        android:translateY="10.08">
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M164,104 H348 A28,28 0 0 1 376,132 V380 A28,28 0 0 1 348,408 H164 A28,28 0 0 1 136,380 V132 A28,28 0 0 1 164,104 Z" />
+        <path
+            android:fillColor="#E3FAFC"
+            android:strokeColor="#0B7285"
+            android:strokeWidth="12"
+            android:pathData="M220,80 H292 A20,20 0 0 1 312,100 V116 A20,20 0 0 1 292,136 H220 A20,20 0 0 1 200,116 V100 A20,20 0 0 1 220,80 Z" />
+        <path
+            android:strokeColor="#0B7285"
+            android:strokeWidth="24"
+            android:strokeLineCap="round"
+            android:pathData="M188,228 H324 M188,288 H324 M188,348 H272" />
+    </group>
+</vector>

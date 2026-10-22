@@ -1,0 +1,146 @@
+# Проверки → сборка образов (amd64 + arm64) в ghcr.io → выкладка на сервер.
+#
+# Сервер ничего не собирает (хватает самого маленького VPS, 1 ГБ):
+# получает docker-compose и скрипты, скачивает готовые образы, перезапускает.
+#
+# Шаг выкладки включается, когда в Settings → Secrets and variables → Actions
+# заданы: переменная DEPLOY_HOST (IP/адрес сервера), DEPLOY_USER (ubuntu) и
+# секрет DEPLOY_SSH_KEY (приватный ключ для входа). Пока их нет — только
+# проверки и сборка. Подробно — deploy/README.md.
+name: build-and-deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# выкладки не должны идти параллельно и обрываться на середине
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/dqnial/mp-report
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: backend — зависимости
+        working-directory: backend
+        run: npm ci && npx prisma generate
+      - name: backend — типы, линтер, тесты
+        working-directory: backend
+        run: |
+          npx tsc --noEmit -p tsconfig.json
+          npx eslint "src/**/*.ts" "scripts/*.ts"
+          npx jest --ci
+
+      - name: frontend — типы и сборка
+        working-directory: frontend
+        run: npm ci && npm run build
+
+  build:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # серверы бывают x86 (amd64) и ARM (arm64): собираем оба,
+      # чтобы переезд между ними не требовал изменений
+      - name: образ бэкенда
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-backend:latest
+            ${{ env.IMAGE_PREFIX }}-backend:${{ github.sha }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,scope=backend,mode=max
+
+      - name: образ фронта (Caddy)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/web.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-web:latest
+            ${{ env.IMAGE_PREFIX }}-web:${{ github.sha }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,scope=web,mode=max
+
+  deploy:
+    needs: build
+    if: ${{ vars.DEPLOY_HOST != '' }}
+    runs-on: ubuntu-latest
+    env:
+      HOST: ${{ vars.DEPLOY_HOST }}
+      USER_NAME: ${{ vars.DEPLOY_USER || 'ubuntu' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: SSH-ключ
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy
+          chmod 600 ~/.ssh/deploy
+          # ключ сервера запоминается при первой выкладке
+          printf 'Host srv\n  HostName %s\n  User %s\n  IdentityFile ~/.ssh/deploy\n  StrictHostKeyChecking accept-new\n' \
+            "$HOST" "$USER_NAME" > ~/.ssh/config
+
+      - name: файлы развёртывания на сервер
+        run: |
+          ssh srv 'mkdir -p ~/mp-report/deploy'
+          scp deploy/docker-compose.prod.yml deploy/backup.sh deploy/restore.sh srv:~/mp-report/deploy/
+          ssh srv 'chmod +x ~/mp-report/deploy/*.sh'
+
+      - name: скачать образы и перезапустить
+        run: |
+          # временный токен этого запуска — на сервере долгоживущих паролей нет
+          echo "${{ secrets.GITHUB_TOKEN }}" | ssh srv 'docker login ghcr.io -u ${{ github.actor }} --password-stdin'
+          ssh srv 'bash -s' <<'EOF'
+          set -euo pipefail
+          cd ~/mp-report/deploy
+          test -f .env || { echo "на сервере нет ~/mp-report/deploy/.env — см. deploy/README.md"; exit 1; }
+          docker compose -f docker-compose.prod.yml pull
+          docker compose -f docker-compose.prod.yml up -d --no-build --remove-orphans
+          docker logout ghcr.io
+          docker image prune -f
+          EOF
+
+      - name: проверка, что сайт отвечает
+        run: |
+          # API без входа отвечает 401 — значит Caddy, бэкенд и база живы
+          for i in $(seq 1 30); do
+            code=$(ssh srv "curl -s -o /dev/null -w '%{http_code}' https://\$(grep ^DOMAIN= ~/mp-report/deploy/.env | cut -d= -f2)/api/auth/me" || true)
+            [ "$code" = "401" ] && { echo "сайт отвечает"; exit 0; }
+            sleep 5
+          done
+          echo "сайт не ответил за 2,5 минуты (последний код: $code)"
+          ssh srv 'cd ~/mp-report/deploy && docker compose -f docker-compose.prod.yml ps && docker compose -f docker-compose.prod.yml logs --tail 50 backend'
+          exit 1

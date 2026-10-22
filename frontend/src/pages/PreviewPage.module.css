@@ -1,0 +1,35 @@
+.link {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+
+/* откуда строка — полоской слева: из приложения бирюзовая, из файла серая */
+.row {
+  border-left-width: 4px;
+}
+
+.row[data-source='app'] {
+  border-left-color: var(--mantine-color-teal-5);
+}
+
+.row[data-source='file'] {
+  border-left-color: var(--mantine-color-gray-4);
+  background: var(--mantine-color-gray-1);
+}
+
+.row[data-source='empty'] {
+  border-style: dashed;
+  border-left-style: solid;
+  border-left-color: var(--mantine-color-gray-3);
+  background: transparent;
+}
+
+.text {
+  overflow-wrap: anywhere;
+}
+
+.missing {
+  color: var(--mantine-color-gray-5);
+  font-style: italic;
+}

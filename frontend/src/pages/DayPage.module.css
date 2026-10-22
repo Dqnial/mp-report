@@ -1,0 +1,27 @@
+.planRow {
+  padding: 6px 4px;
+  border-top: 1px solid var(--mantine-color-gray-2);
+}
+
+.add :global(.mantine-Button-root) {
+  padding-inline: var(--mantine-spacing-xs);
+}
+
+/* совсем узкий экран: иконка уступает место надписи */
+@media (max-width: 359px) {
+  .add :global(.mantine-Button-section) {
+    display: none;
+  }
+}
+
+.search {
+  display: flex;
+  align-items: center;
+  gap: var(--mantine-spacing-xs);
+  min-height: 48px;
+  padding: 0 var(--mantine-spacing-md);
+  border: 1px solid var(--mantine-color-gray-4);
+  border-radius: var(--mantine-radius-md);
+  background: var(--mantine-color-white);
+  color: var(--mantine-color-gray-6);
+}
