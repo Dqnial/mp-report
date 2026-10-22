@@ -74,7 +74,7 @@ npx playwright test
 | frontend | `npm run build` | проверка типов и сборка PWA |
 | frontend | `npm run lint` | oxlint |
 | frontend | `APP_URL=https://… npx cap sync android` | обновить Android-проект |
-| e2e | `npx playwright test` | сквозные тесты (8) |
+| e2e | `npx playwright test` | сквозные тесты (9) |
 | e2e | `npx playwright show-report` | отчёт последнего прогона |
 
 ## Соглашения

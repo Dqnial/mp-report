@@ -127,6 +127,17 @@ export interface ReportCheck {
   placed: number;
   total: number;
   warnings: string[];
+  /**
+   * версия отчёта: меняется при любой правке визитов месяца, новом шаблоне,
+   * новой сборке сервера; файл на телефоне хранится под ней
+   */
+  version: string | null;
+}
+
+/** Скачанный отчёт и версия, под которой его отдал сервер. */
+export interface ReportFile {
+  file: File;
+  version: string | null;
 }
 
 export interface Invite {

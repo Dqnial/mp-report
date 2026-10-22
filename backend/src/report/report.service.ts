@@ -34,17 +34,23 @@ export class ReportService {
     private readonly cache: ReportCacheService,
   ) {}
 
+  /**
+   * Версия считается ДО чтения визитов: если визит добавят прямо во время
+   * сборки, файл окажется не старее своей версии (в худшем случае новее) —
+   * устаревший файл под новой версией невозможен.
+   */
   async build(userId: string, month: string) {
     const template = await this.templates.get(userId, month);
-    const key = await this.cache.key(userId, month);
-    const cached = key && (await this.cache.get(key));
-    if (cached) return { ...cached, fileName: template.originalName };
+    const cacheKey = await this.cache.key(userId, month);
+    const version = cacheKey?.version ?? null;
+    const cached = cacheKey && (await this.cache.get(cacheKey.key));
+    if (cached) return { ...cached, fileName: template.originalName, version };
 
     const visits = await this.visits.forReport(userId, month);
     const result = await fillTemplate(template.file, visits.map(toCells));
     const report = { ...result, total: visits.length };
-    if (key) await this.cache.set(key, report);
-    return { ...report, fileName: template.originalName };
+    if (cacheKey) await this.cache.set(cacheKey.key, report);
+    return { ...report, fileName: template.originalName, version };
   }
 
   /** Строки дня, как они будут в файле, — экран «Предпросмотр». */

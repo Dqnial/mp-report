@@ -1,4 +1,12 @@
-import { Controller, Get, Param, Query, StreamableFile } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Param,
+  Query,
+  Res,
+  StreamableFile,
+} from '@nestjs/common';
+import type { Response } from 'express';
 import { ApiCookieAuth, ApiTags } from '@nestjs/swagger';
 import { Matches } from 'class-validator';
 import { CurrentUser, type AuthUser } from '../auth/current-user.decorator';
@@ -32,20 +40,26 @@ export class ReportController {
     @CurrentUser() user: AuthUser,
     @Param('month', MonthPipe) month: string,
   ) {
-    const { placed, total, warnings, fileName } = await this.reports.build(
-      user.id,
-      month,
-    );
-    return { fileName, placed, total, warnings };
+    const { placed, total, warnings, fileName, version } =
+      await this.reports.build(user.id, month);
+    return { fileName, placed, total, warnings, version };
   }
 
-  /** Готовый xlsx под исходным именем. */
+  /**
+   * Готовый xlsx под исходным именем. Версия — в заголовке X-Report-Version:
+   * телефон хранит файл под ней и не скачивает его снова, пока она та же.
+   */
   @Get(':month')
   async download(
     @CurrentUser() user: AuthUser,
     @Param('month', MonthPipe) month: string,
+    @Res({ passthrough: true }) res: Response,
   ) {
-    const { file, fileName } = await this.reports.build(user.id, month);
+    const { file, fileName, version } = await this.reports.build(
+      user.id,
+      month,
+    );
+    if (version) res.setHeader('X-Report-Version', version);
     return new StreamableFile(file, {
       type: XLSX_MIME,
       // filename — ASCII-запасной вариант, filename* — настоящее имя (RFC 6266)

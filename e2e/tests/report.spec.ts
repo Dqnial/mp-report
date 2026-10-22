@@ -1,3 +1,4 @@
+import JSZip from 'jszip';
 import { expect, test } from '@playwright/test';
 import { makeTemplate, openApp, today, unique } from '../fixtures';
 
@@ -9,7 +10,7 @@ test('шаблон → план дня → визит по плану → пре
 
   // загрузка шаблона через экран «Отчёт» (поле выбора файла)
   const template = await makeTemplate();
-  await page.getByRole('link', { name: 'Отчёт' }).click();
+  await page.getByRole('link', { name: 'Отчёт', exact: true }).click();
   const chooser = page.waitForEvent('filechooser');
   await page
     .getByRole('button', { name: /Загрузить шаблон|Заменить шаблон/ })
@@ -18,7 +19,7 @@ test('шаблон → план дня → визит по плану → пре
   await expect(page.getByText(/Шаблон на .* загружен/)).toBeVisible();
 
   // план дня из шаблона и визит в запланированное ЛПУ через «+»
-  await page.getByRole('link', { name: 'Визиты' }).click();
+  await page.getByRole('link', { name: 'Визиты', exact: true }).click();
   await expect(page.getByRole('button', { name: /^По плану/ })).toBeVisible();
   // первая — группа плана (после прошлых прогонов ниже бывает и группа
   // «не по плану» с тем же названием, когда строки плана заполнены)
@@ -49,4 +50,66 @@ test('шаблон → план дня → визит по плану → пре
     encodeURIComponent(template.name),
   );
   expect((await file.body()).subarray(0, 2).toString()).toBe('PK'); // zip
+});
+
+test('отчёт: повторный заход не качает файл заново, новый визит — качает один раз', async ({
+  page,
+}) => {
+  const month = today().slice(0, 7);
+  const isFile = (url: string) =>
+    new RegExp(`/api/reports/${month}$`).test(new URL(url).pathname);
+  let fileRequests = 0;
+  page.on('request', (r) => {
+    if (isFile(r.url())) fileRequests++;
+  });
+  const send = page.getByRole('button', { name: 'Отправить отчёт' });
+  const placed = async () =>
+    Number(
+      (await page.getByText(/в файл попадёт визитов: \d+/).textContent())!.match(
+        /визитов: (\d+)/,
+      )![1],
+    );
+
+  // первый заход: проверка + файл
+  await openApp(page);
+  await page.getByRole('link', { name: 'Отчёт', exact: true }).click();
+  await expect(send).toBeEnabled();
+  expect(fileRequests).toBe(1);
+  const before = await placed();
+
+  // туда-обратно без изменений: только проверка, файл из памяти
+  await page.getByRole('link', { name: 'Визиты', exact: true }).click();
+  await page.getByRole('link', { name: 'Отчёт', exact: true }).click();
+  await expect(send).toBeEnabled();
+  expect(fileRequests).toBe(1);
+
+  // новый визит на сервере (как с другого устройства) — новая версия
+  const name = unique('Версионный Иван');
+  const id = `e2e-${Date.now().toString(36)}`;
+  const put = await page.request.put(`/api/visits/sync/${id}`, {
+    data: {
+      clientId: id,
+      date: today(),
+      kind: 'DOCTOR',
+      placeName: 'Клиника Бета',
+      fullName: name,
+      products: [],
+      updatedAt: new Date().toISOString(),
+    },
+  });
+  expect(put.ok()).toBe(true);
+
+  await page.getByRole('link', { name: 'Визиты', exact: true }).click();
+  await page.getByRole('link', { name: 'Отчёт', exact: true }).click();
+  await expect(send).toBeEnabled();
+  expect(fileRequests).toBe(2);
+  expect(await placed()).toBe(before + 1);
+
+  // в файле этой версии — новый визит (тело ответа страницы недоступно:
+  // в собранной версии запрос идёт через сервис-воркер — берём файл напрямую)
+  const xlsx = await (await page.request.get(`/api/reports/${month}`)).body();
+  const sheet = await (await JSZip.loadAsync(xlsx))
+    .file('xl/worksheets/sheet1.xml')!
+    .async('string');
+  expect(sheet).toContain(name);
 });

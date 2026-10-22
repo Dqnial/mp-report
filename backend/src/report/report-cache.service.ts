@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import { monthRange } from '../common/dates';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
@@ -37,7 +38,11 @@ export class ReportCacheService {
     private readonly redis: RedisService,
   ) {}
 
-  /** Ключ кеша для текущего состояния данных; null — шаблона нет. */
+  /**
+   * Версия отчёта для текущего состояния данных и ключ кеша под неё;
+   * null — шаблона нет. Версию (короткий хеш) получает и фронт: по ней он
+   * понимает, не устарел ли уже скачанный файл.
+   */
   async key(userId: string, month: string) {
     const template = await this.prisma.template.findUnique({
       where: { userId_month: { userId, month } },
@@ -57,7 +62,10 @@ export class ReportCacheService {
       visits._max.updatedAt?.getTime() ?? 0,
       process.env.APP_BUILD ?? 'dev',
     ].join(':');
-    return `report:${userId}:${month}:${version}`;
+    return {
+      key: `report:${userId}:${month}:${version}`,
+      version: createHash('sha256').update(version).digest('hex').slice(0, 16),
+    };
   }
 
   async get(key: string): Promise<CachedReport | null> {

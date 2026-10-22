@@ -54,16 +54,22 @@ describe('ReportCacheService', () => {
     }) as unknown as PrismaService;
 
   it('ключ меняется при любой правке: новый визит, правка, удаление', async () => {
-    const key = (count: number, updated: number | null) =>
-      new ReportCacheService(prisma(count, updated), fakeRedis(true)).key(
-        'u1',
-        '2026-10',
-      );
+    const key = async (count: number, updated: number | null) =>
+      (await new ReportCacheService(
+        prisma(count, updated),
+        fakeRedis(true),
+      ).key('u1', '2026-10'))!;
     const base = await key(10, 5_000);
-    expect(await key(10, 5_000)).toBe(base); // ничего не менялось — тот же
-    expect(await key(11, 6_000)).not.toBe(base); // новый визит
-    expect(await key(10, 7_000)).not.toBe(base); // правка или мягкое удаление
-    expect(base).toMatch(/^report:u1:2026-10:/);
+    expect(await key(10, 5_000)).toEqual(base); // ничего не менялось — тот же
+    const added = await key(11, 6_000); // новый визит
+    const edited = await key(10, 7_000); // правка или мягкое удаление
+    for (const k of [added, edited]) {
+      expect(k.key).not.toBe(base.key);
+      expect(k.version).not.toBe(base.version);
+    }
+    expect(base.key).toMatch(/^report:u1:2026-10:/);
+    // фронту — короткий хеш, без внутренностей ключа
+    expect(base.version).toMatch(/^[0-9a-f]{16}$/);
   });
 
   it('Redis недоступен — нет кеша, но и нет ошибок', async () => {

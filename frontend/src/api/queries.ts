@@ -39,6 +39,7 @@ import { api, ApiError, apiFetch, UnauthorizedError } from './client';
 import type {
   DayPlan,
   DayPreview,
+  ReportFile,
   ImportCounts,
   Invite,
   Me,
@@ -351,15 +352,29 @@ export const usePreview = (date: string, enabled: boolean) =>
     placeholderData: keepPreviousData,
   });
 
-export const useReportFile = (month: string, fileName: string | undefined) =>
+/**
+ * Готовый файл отчёта — по версии из проверки. Файл одной версии не меняется,
+ * поэтому повторный заход на экран его не скачивает; новая версия (визиты
+ * изменились) — новый ключ, файл скачивается один раз. Старый файл под новой
+ * версией не показываем (без placeholderData).
+ */
+export const useReportFile = (
+  month: string,
+  fileName: string | undefined,
+  version: string | null | undefined,
+) =>
   useQuery({
-    queryKey: [...keys.report(month), 'file', fileName],
-    queryFn: async () => {
+    queryKey: [...keys.report(month), 'file', fileName, version],
+    queryFn: async (): Promise<ReportFile> => {
       const res = await apiFetch(`/reports/${month}`);
-      return new File([await res.blob()], fileName!, { type: XLSX_MIME });
+      return {
+        file: new File([await res.blob()], fileName!, { type: XLSX_MIME }),
+        version: res.headers.get('X-Report-Version'),
+      };
     },
-    enabled: !!fileName,
-    staleTime: 0,
+    enabled: !!fileName && version !== undefined,
+    staleTime: Infinity,
+    gcTime: 30 * 60_000,
   });
 
 // ─── приглашения ────────────────────────────────────────────────────────────

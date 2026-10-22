@@ -104,9 +104,19 @@ export function ReportPage() {
   const month = picked ?? current;
   const template = templates.data?.find((t) => t.month === month);
   const check = useReportCheck(month, !!template && !unsent);
-  const reportFile = useReportFile(month, check.data?.fileName);
-  // пока проверка/файл обновляются, на экране может быть устаревшее
-  const preparing = check.isFetching || reportFile.isFetching;
+  const reportFile = useReportFile(
+    month,
+    check.data?.fileName,
+    check.data?.version,
+  );
+  // Прошлые данные проверки показываем сразу, а отправку ждём до ответа
+  // проверки: визит мог только что уйти на сервер, и тогда на телефоне —
+  // файл старой версии. Ответ свежий и версия та же — файл уже есть, качать
+  // не нужно. Проверка не удалась — тоже не отправляем: свежесть неизвестна.
+  const checking = check.isFetching;
+  const fileReady =
+    !!reportFile.data && !reportFile.isFetching && !checking && !check.isError;
+  const preparing = !!template && !unsent && !fileReady && !check.isError;
 
   const onUpload = (file: File | null) => {
     if (!file) return;
@@ -213,21 +223,23 @@ export function ReportPage() {
               <Text fw={500} style={{ wordBreak: 'break-word' }}>
                 {template.originalName}
               </Text>
-              {check.isFetching ? (
-                <Loader size="sm" />
-              ) : (
-                check.data && (
+              {check.data ? (
+                <Group gap={6} wrap="nowrap">
                   <Text size="sm" c="dimmed">
                     Из приложения в файл попадёт визитов: {check.data.placed}
                     {check.data.total !== check.data.placed &&
                       ` из ${check.data.total}`}
                   </Text>
-                )
+                  {/* прошлые данные видны сразу, свежие догружаются */}
+                  {checking && <Loader size={12} aria-label="обновляю" />}
+                </Group>
+              ) : (
+                check.isFetching && <Loader size="sm" />
               )}
             </Stack>
           </Paper>
 
-          {!check.isFetching && check.data?.warnings.length ? (
+          {check.data?.warnings.length ? (
             <Alert
               color="orange"
               icon={<IconAlertTriangle />}
@@ -261,11 +273,11 @@ export function ReportPage() {
             color="green"
             leftSection={<IconSend size={28} />}
             loading={preparing || (unsent > 0 && sync.syncing)}
-            disabled={!reportFile.data || unsent > 0}
+            disabled={!fileReady || unsent > 0}
             onClick={() => {
               setShareFailed(false);
-              if (reportFile.data) {
-                shareReport(reportFile.data, () => setShareFailed(true));
+              if (fileReady && reportFile.data) {
+                shareReport(reportFile.data.file, () => setShareFailed(true));
               }
             }}
           >
@@ -297,7 +309,7 @@ export function ReportPage() {
                     variant="light"
                     color="orange"
                     leftSection={<IconDownload size={18} />}
-                    onClick={() => download(reportFile.data!)}
+                    onClick={() => download(reportFile.data!.file)}
                   >
                     Скачать файл
                   </Button>
@@ -326,8 +338,10 @@ export function ReportPage() {
                 size="sm"
                 color="gray"
                 leftSection={<IconDownload size={18} />}
-                disabled={preparing || !reportFile.data || unsent > 0}
-                onClick={() => reportFile.data && download(reportFile.data)}
+                disabled={!fileReady || unsent > 0}
+                onClick={() =>
+                  fileReady && reportFile.data && download(reportFile.data.file)
+                }
               >
                 Скачать файл
               </Button>
