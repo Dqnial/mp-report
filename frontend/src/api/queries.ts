@@ -40,6 +40,9 @@ import { XLSX_MIME } from '../fileShare';
 import { api, ApiError, apiFetch, UnauthorizedError } from './client';
 import type {
   BaseStatus,
+  DirectoryEdit,
+  DirectoryEntries,
+  DirectoryEntry,
   BaseUploaded,
   DayPlan,
   DayPreview,
@@ -73,6 +76,7 @@ export const keys = {
     ['report', date.slice(0, 7), 'preview', date] as const,
   invites: ['invites'] as const,
   base: ['base'] as const,
+  directoryEntries: ['directory-entries'] as const,
 };
 
 /** Нет связи с сервером (а не ответ сервера с ошибкой). */
@@ -388,6 +392,51 @@ export const useReportFile = (
     staleTime: Infinity,
     gcTime: 30 * 60_000,
   });
+
+// ─── справочник (правка — нужен сервер) ─────────────────────────────────────
+
+export const useDirectoryEntries = () =>
+  useQuery({
+    queryKey: keys.directoryEntries,
+    queryFn: () => api.get<DirectoryEntries>('/directory/entries'),
+    staleTime: 0,
+  });
+
+/**
+ * Правка врача/провизора или аптеки. После неё — свежий справочник для
+ * подсказок, и визиты месяца (сервер мог исправить в них те же опечатки).
+ */
+export function useEditDirectoryEntry() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      entry,
+      changes,
+    }: {
+      entry: DirectoryEntry;
+      changes: DirectoryEdit;
+    }) => {
+      type Fixed = { id: string; fixedVisits: number };
+      if (entry.type === 'contact') {
+        return api.patch<Fixed>(`/contacts/${entry.id}`, changes);
+      }
+      // аптека без провизора: правится само место
+      const { placeName, ...rest } = changes;
+      return api.patch<Fixed>(`/places/${entry.id}`, {
+        ...rest,
+        name: placeName,
+      });
+    },
+    onSuccess: async (res, { changes }) => {
+      void qc.invalidateQueries({ queryKey: keys.directoryEntries });
+      void qc.invalidateQueries({ queryKey: keys.base });
+      await refreshDirectory();
+      if (res.fixedVisits && changes.fixVisitsFrom) {
+        await pullMonth(changes.fixVisitsFrom.slice(0, 7));
+      }
+    },
+  });
+}
 
 // ─── база врачей и аптек (нужен сервер) ─────────────────────────────────────
 

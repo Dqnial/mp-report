@@ -149,9 +149,14 @@ export async function saveVisit(
     createdAt: existing?.createdAt ?? updatedAt,
     templateRow: null,
     fromFile: false,
-    productsRaw: null,
     ...existing,
     ...payload,
+    // визит из файла: препараты исправили — исходный текст J–M больше не в силе
+    productsRaw:
+      existing?.productsRaw &&
+      JSON.stringify(existing.products) === JSON.stringify(payload.products)
+        ? existing.productsRaw
+        : null,
     month: monthOf(payload.date),
     updatedAt,
     syncState: 'pending',
@@ -274,6 +279,7 @@ export function fromServer(v: ServerVisit, uid: string): LocalVisit {
     agreement: v.agreement ?? null,
     fact: v.fact ?? null,
     deviation: v.deviation ?? null,
+    potential: v.potential ?? null,
     templateRow: v.templateRow,
     fromFile: v.fromFile,
     createdAt: v.createdAt,

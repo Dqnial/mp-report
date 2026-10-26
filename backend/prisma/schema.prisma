@@ -95,6 +95,13 @@ enum PlaceKind {
   PHARMACY
 }
 
+/// Потенциал врача — сколько назначений наших препаратов в день (база врачей)
+enum Potential {
+  LOW
+  MEDIUM
+  HIGH
+}
+
 model Place {
   id      String    @id @default(uuid()) @db.Uuid
   userId  String    @db.Uuid
@@ -105,6 +112,9 @@ model Place {
   /// аптека: последняя договорённость (с аптекой, а не с провизором — они меняются)
   lastAgreement     String?
   lastAgreementDate DateTime? @db.Date
+
+  /// аптека без провизора: не включать строкой в «Базу врачей и аптек»
+  hiddenFromBase Boolean @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -128,6 +138,16 @@ model Contact {
   lastAgreement     String?
   /// дата визита, на котором о ней договорились (правка старого визита не затрёт новую)
   lastAgreementDate DateTime? @db.Date
+
+  /// потенциал и дата, с которой он известен (визит или правка в справочнике):
+  /// правка старого визита не затрёт более свежий
+  potential     Potential?
+  potentialDate DateTime?  @db.Date
+
+  /// не включать в «Базу врачей и аптек» (врач остаётся в подсказках)
+  hiddenFromBase Boolean   @default(false)
+  /// правили вручную в справочнике — ночная уборка такую запись не трогает
+  editedAt       DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -170,13 +190,18 @@ model Visit {
   agreement String?
   fact      String?
   deviation String?
+  /// врач: потенциал, отмеченный на визите (уходит в справочник)
+  potential Potential?
 
   /// Визит «из файла»: номер строки в шаблоне месяца, где он уже записан.
-  /// Такие визиты экспорт пропускает (они уже в файле), в приложении — только
-  /// просмотр; при повторной загрузке шаблона перечитываются заново.
-  templateRow Int?
+  /// Экспорт не вписывает его заново (он уже в файле); при повторной загрузке
+  /// шаблона такие визиты перечитываются заново.
+  templateRow  Int?
+  /// визит «из файла» исправили или удалили в приложении: экспорт
+  /// перезаписывает его строку, повторная загрузка шаблона правку не затирает
+  fileEditedAt DateTime?
   /// J–M как было написано в файле — распознавание препаратов нечёткое
-  productsRaw String?
+  productsRaw  String?
 
   /// Офлайн-синк. Время последней правки НА УСТРОЙСТВЕ: из двух правок одного
   /// визита с разных телефонов побеждает более поздняя.

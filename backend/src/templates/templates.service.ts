@@ -8,7 +8,8 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { Queue } from 'bullmq';
-import { fromIsoDate, monthRange } from '../common/dates';
+import { randomUUID } from 'node:crypto';
+import { fromIsoDate, monthRange, toIsoDate } from '../common/dates';
 import { DirectoryService } from '../directory/directory.service';
 import { quietRedisErrors } from '../redis/quiet-errors';
 import { RedisService } from '../redis/redis.service';
@@ -187,6 +188,11 @@ export class TemplatesService {
    * привязываем тот визит к строке, чтобы экспорт его больше не вписывал.
    * Визиты из приложения никогда не удаляются (их clientId нужен офлайн-синку),
    * а только отвязываются и сопоставляются заново.
+   *
+   * Визит «из файла», исправленный в приложении, — правка пользователя: если
+   * его строка на месте (тот же номер, тот же день), он остаётся к ней
+   * привязан (экспорт перепишет строку); строки нет — становится обычным
+   * визитом приложения.
    */
   private async importRows(
     tx: Tx,
@@ -196,16 +202,52 @@ export class TemplatesService {
   ): Promise<ImportCounts> {
     const { from, to } = monthRange(month);
     const inMonth = { userId, date: { gte: from, lt: to } };
-    await this.forgetFileRows(tx, userId, month);
+    const parsed = rows.map(rowToVisit);
+    const edited = await tx.visit.findMany({
+      where: {
+        ...inMonth,
+        templateRow: { not: null },
+        fileEditedAt: { not: null },
+      },
+    });
+    const kept = new Map(
+      edited
+        .filter((e) =>
+          parsed.some(
+            (v) =>
+              v.templateRow === e.templateRow && v.date === toIsoDate(e.date),
+          ),
+        )
+        .map((e) => [e.templateRow!, e]),
+    );
+    await this.forgetFileRows(
+      tx,
+      userId,
+      month,
+      [...kept.values()].map((e) => e.id),
+    );
+    // исправленный визит, чья строка теперь другая, освобождает её clientId —
+    // строку прочитаем заново под тем же стабильным id
+    for (const e of edited) {
+      if (kept.has(e.templateRow!) || e.deletedAt) continue;
+      if (!e.clientId.startsWith(IMPORTED_PREFIX)) continue;
+      await tx.visit.update({
+        where: { id: e.id },
+        data: { clientId: `mv${randomUUID().replace(/-/g, '')}` },
+      });
+    }
     const appVisits = await tx.visit.findMany({
       where: { ...inMonth, deletedAt: null },
     });
 
     let created = 0;
     let linked = 0;
-    for (const row of rows) {
-      const v = rowToVisit(row);
+    for (const v of parsed) {
       const date = fromIsoDate(v.date);
+      if (kept.has(v.templateRow)) {
+        linked++;
+        continue;
+      }
 
       const twin = v.fullName
         ? appVisits.find(
@@ -247,18 +289,35 @@ export class TemplatesService {
     return { created, linked };
   }
 
-  /** Убирает связь месяца с файлом: импортированное — удалить, своё — отвязать. */
-  private async forgetFileRows(tx: Tx, userId: string, month: string) {
+  /**
+   * Убирает связь месяца с файлом: импортированное — удалить, своё — отвязать.
+   * Импортированное, но исправленное в приложении — тоже своё (если не
+   * удалено). keep — визиты, которые остаются привязанными к строкам.
+   */
+  private async forgetFileRows(
+    tx: Tx,
+    userId: string,
+    month: string,
+    keep: string[] = [],
+  ) {
     const { from, to } = monthRange(month);
     const fromFile = {
       userId,
       date: { gte: from, lt: to },
       templateRow: { not: null },
+      id: { notIn: keep },
     };
     await tx.visit.deleteMany({
-      where: { ...fromFile, clientId: { startsWith: IMPORTED_PREFIX } },
+      where: {
+        ...fromFile,
+        clientId: { startsWith: IMPORTED_PREFIX },
+        OR: [{ fileEditedAt: null }, { deletedAt: { not: null } }],
+      },
     });
-    await tx.visit.updateMany({ where: fromFile, data: { templateRow: null } });
+    await tx.visit.updateMany({
+      where: fromFile,
+      data: { templateRow: null, fileEditedAt: null },
+    });
   }
 
   list(userId: string) {

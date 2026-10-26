@@ -17,7 +17,15 @@ export interface DirectoryContact {
   } | null;
   /** визиты к этому контакту, новые первыми */
   visits: { kind: 'DOCTOR' | 'PHARMACY'; products: unknown }[];
+  potential?: 'LOW' | 'MEDIUM' | 'HIGH' | null;
 }
+
+/** Как потенциал пишут в базе руководителя. */
+export const POTENTIAL_LABEL = {
+  LOW: 'Низкий',
+  MEDIUM: 'Средний',
+  HIGH: 'Высокий',
+} as const;
 
 export interface DirectoryPlace {
   name: string;
@@ -104,6 +112,11 @@ function merge(group: DirectoryContact[]): BaseRecord {
     place: withPlace?.place?.name.trim() ?? '',
     address: withPlace?.place?.address?.trim() ?? '',
     products: productsOf(group),
+    // у повторов — с самой свежей записи, где он отмечен
+    potential: (() => {
+      const p = group.find((c) => c.potential)?.potential;
+      return p ? POTENTIAL_LABEL[p] : '';
+    })(),
   };
 }
 

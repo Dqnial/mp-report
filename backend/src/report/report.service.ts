@@ -6,7 +6,12 @@ import { commentCellText } from './comment-cell';
 import { TemplatesService } from '../templates/templates.service';
 import { ReportCacheService } from './report-cache.service';
 import { VisitsService } from '../visits/visits.service';
-import { fillTemplate, previewDay, type VisitCells } from './xlsx-template';
+import {
+  fillTemplate,
+  previewDay,
+  type FileRowEdit,
+  type VisitCells,
+} from './xlsx-template';
 
 const toCells = (v: Visit): VisitCells => ({
   id: v.clientId,
@@ -19,6 +24,13 @@ const toCells = (v: Visit): VisitCells => ({
   phone: v.phone,
   products: productCells(v.products as unknown as VisitProduct[]),
   comment: commentCellText(v),
+});
+
+const toFileEdit = (v: Visit): FileRowEdit => ({
+  row: v.templateRow!,
+  visit: v.deletedAt ? null : toCells(v),
+  // исходный текст J–M остаётся, пока препараты не правили
+  keepProducts: v.productsRaw != null,
 });
 
 /**
@@ -46,8 +58,15 @@ export class ReportService {
     const cached = cacheKey && (await this.cache.get(cacheKey.key));
     if (cached) return { ...cached, fileName: template.originalName, version };
 
-    const visits = await this.visits.forReport(userId, month);
-    const result = await fillTemplate(template.file, visits.map(toCells));
+    const [visits, edits] = await Promise.all([
+      this.visits.forReport(userId, month),
+      this.visits.fileEdits(userId, month),
+    ]);
+    const result = await fillTemplate(
+      template.file,
+      visits.map(toCells),
+      edits.map(toFileEdit),
+    );
     const report = { ...result, total: visits.length };
     if (cacheKey) await this.cache.set(cacheKey.key, report);
     return { ...report, fileName: template.originalName, version };
@@ -57,7 +76,15 @@ export class ReportService {
   async preview(userId: string, date: string) {
     const month = date.slice(0, 7);
     const template = await this.templates.get(userId, month);
-    const visits = await this.visits.forReport(userId, month);
-    return previewDay(template.file, visits.map(toCells), date);
+    const [visits, edits] = await Promise.all([
+      this.visits.forReport(userId, month),
+      this.visits.fileEdits(userId, month),
+    ]);
+    return previewDay(
+      template.file,
+      visits.map(toCells),
+      date,
+      edits.map(toFileEdit),
+    );
   }
 }

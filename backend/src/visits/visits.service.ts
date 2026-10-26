@@ -40,7 +40,7 @@ export const toVisitView = (v: Visit) => ({
   ...v,
   date: toIsoDate(v.date),
   products: v.products as unknown as VisitProduct[],
-  /** уже записан в файле шаблона — только просмотр */
+  /** уже записан в файле шаблона: правка перезапишет его строку в отчёте */
   fromFile: v.templateRow != null,
 });
 
@@ -59,15 +59,26 @@ const DAY_ORDER: Prisma.VisitOrderByWithRelationInput[] = [
 ];
 
 /**
- * Визит «из файла» в отчёте уже записан, и ячейку с ним мы не перезаписываем
- * (только дописываем пустые) — правка в приложении до отчёта не дошла бы.
+ * Визит «из файла» можно исправить или удалить — экспорт перезапишет (или
+ * очистит) его строку. Но не перенести на другой день: строка — в блоке
+ * своего дня, и запись в чужой день испортила бы файл.
  */
-function assertEditable(v: Visit) {
-  if (v.templateRow != null) {
-    throw new ConflictException(
-      'Этот визит уже записан в файле отчёта. Исправьте его в Excel и загрузите файл заново',
+function fileEdit(v: Visit, date?: string, products?: VisitProductDto[]) {
+  if (v.templateRow == null) return {};
+  if (date && date !== toIsoDate(v.date)) {
+    throw new BadRequestException(
+      'Визит из файла нельзя перенести на другой день — удалите его и добавьте новый',
     );
   }
+  // препараты исправили — J–M пишем заново; иначе в файле остаётся как было
+  // (там бывает то, что распознать не удалось)
+  const productsEdited =
+    !!products &&
+    JSON.stringify(uniqueProducts(products)) !== JSON.stringify(v.products);
+  return {
+    fileEditedAt: new Date(),
+    ...(productsEdited && { productsRaw: null }),
+  };
 }
 
 @Injectable()
@@ -139,10 +150,10 @@ export class VisitsService {
     const existing = await this.byClientId(userId, clientId);
 
     if (existing) {
-      assertEditable(existing);
       if (lastChange(existing) >= at.getTime()) {
         return { visit: toVisitView(existing), applied: false };
       }
+      const edited = fileEdit(existing, fields.date, fields.products);
       const visit = await this.prisma.$transaction(async (tx) => {
         const contactId = await this.directory.learnFromVisit(
           tx,
@@ -163,9 +174,11 @@ export class VisitsService {
             agreement: fields.agreement ?? null,
             fact: fields.fact ?? null,
             deviation: fields.deviation ?? null,
+            potential: fields.potential ?? null,
             contactId,
             clientUpdatedAt: at,
             deletedAt: null,
+            ...edited,
           },
         });
       });
@@ -208,11 +221,10 @@ export class VisitsService {
     const existing = await this.byClientId(userId, clientId);
     // визита нет (создание так и не дошло) — удалять нечего, это не ошибка
     if (!existing) return;
-    assertEditable(existing);
     if (lastChange(existing) >= at.getTime()) return;
     await this.prisma.visit.update({
       where: { id: existing.id },
-      data: { deletedAt: at },
+      data: { deletedAt: at, ...fileEdit(existing) },
     });
   }
 
@@ -266,7 +278,7 @@ export class VisitsService {
 
   async update(userId: string, id: string, dto: UpdateVisitDto) {
     const current = await this.own(userId, id);
-    assertEditable(current);
+    const edited = fileEdit(current, dto.date, dto.products);
     const visit = await this.prisma.$transaction(async (tx) => {
       const merged = { ...current, ...dto };
       const contactId = await this.directory.learnFromVisit(tx, userId, merged);
@@ -280,6 +292,7 @@ export class VisitsService {
             ? (uniqueProducts(dto.products) as unknown as Prisma.InputJsonValue)
             : undefined,
           clientUpdatedAt: new Date(),
+          ...edited,
         },
       });
     });
@@ -288,10 +301,23 @@ export class VisitsService {
 
   /** Удаление мягкое — запись остаётся (синк других устройств, восстановление). */
   async remove(userId: string, id: string) {
-    assertEditable(await this.own(userId, id));
+    const current = await this.own(userId, id);
     await this.prisma.visit.update({
       where: { id },
-      data: { deletedAt: new Date() },
+      data: { deletedAt: new Date(), ...fileEdit(current) },
+    });
+  }
+
+  /** Исправленные или удалённые в приложении визиты «из файла» — их строки экспорт перезапишет. */
+  fileEdits(userId: string, month: string) {
+    const { from, to } = monthRange(month);
+    return this.prisma.visit.findMany({
+      where: {
+        userId,
+        date: { gte: from, lt: to },
+        templateRow: { not: null },
+        fileEditedAt: { not: null },
+      },
     });
   }
 

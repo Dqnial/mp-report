@@ -18,6 +18,9 @@ export interface VisitProduct {
   order?: number;
 }
 
+/** Потенциал врача: сколько назначений наших препаратов в день. */
+export type Potential = 'LOW' | 'MEDIUM' | 'HIGH';
+
 export interface Visit {
   id: string;
   clientId: string;
@@ -35,8 +38,10 @@ export interface Visit {
   agreement: string | null;
   fact: string | null;
   deviation: string | null;
+  /** врач: потенциал, отмеченный на визите */
+  potential?: Potential | null;
   templateRow: number | null;
-  /** уже записан в файле шаблона — только просмотр */
+  /** уже записан в файле шаблона: правка перезапишет его строку в отчёте */
   fromFile: boolean;
   createdAt: string;
 }
@@ -167,6 +172,40 @@ export interface DayPlan {
   /** есть ли этот день в шаблоне (выходных там нет) */
   inTemplate: boolean;
   groups: PlanGroup[];
+}
+
+/** Строка экрана «Справочник»: врач/провизор или аптека без провизора. */
+export interface DirectoryEntry {
+  type: 'contact' | 'place';
+  id: string;
+  fullName: string | null;
+  specialty: string | null;
+  phone: string | null;
+  placeName: string | null;
+  address: string | null;
+  potential: Potential | null;
+  hiddenFromBase: boolean;
+  /** живых визитов */
+  visits: number;
+  lastVisit: string | null;
+}
+
+export interface DirectoryEntries {
+  doctors: DirectoryEntry[];
+  pharmacies: DirectoryEntry[];
+}
+
+/** Правка из экрана «Справочник»; пустая строка — стереть поле. */
+export interface DirectoryEdit {
+  fullName?: string;
+  specialty?: string;
+  phone?: string;
+  placeName?: string;
+  address?: string;
+  potential?: Potential | null;
+  hiddenFromBase?: boolean;
+  /** исправить те же значения в визитах с этой даты (начало месяца) */
+  fixVisitsFrom?: string;
 }
 
 export interface BaseStatus {

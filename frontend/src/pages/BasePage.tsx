@@ -17,11 +17,12 @@ import {
   IconArrowLeft,
   IconDownload,
   IconSend,
+  IconPencil,
   IconUpload,
 } from '@tabler/icons-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   keys,
   useBaseFile,
@@ -115,12 +116,25 @@ export function BasePage() {
   }
 
   const counts = (
-    <Text size="sm" c="dimmed">
-      В базу попадут: врачей — {status.data.doctors}, аптек —{' '}
-      {status.data.pharmacies}
-      {status.data.merged > 0 &&
-        `. Повторы одного человека сведены в одну строку: ${status.data.merged}`}
-    </Text>
+    <>
+      <Text size="sm" c="dimmed">
+        В базу попадут: врачей — {status.data.doctors}, аптек —{' '}
+        {status.data.pharmacies}
+        {status.data.merged > 0 &&
+          `. Повторы одного человека сведены в одну строку: ${status.data.merged}`}
+      </Text>
+      {/* что попадает в строки базы — правится там */}
+      <Button
+        component={Link}
+        to="/more/directory"
+        variant="subtle"
+        size="compact-sm"
+        leftSection={<IconPencil size={16} />}
+        style={{ alignSelf: 'flex-start' }}
+      >
+        Исправить данные, потенциал, убрать строку
+      </Button>
+    </>
   );
 
   return (

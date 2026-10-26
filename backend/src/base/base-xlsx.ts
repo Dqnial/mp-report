@@ -6,6 +6,7 @@
 // Листы и колонки ищем по заголовкам, а не по буквам: врачи — лист, где в
 // строке заголовка есть «ФИО» и «ЛПУ», аптеки — «ФИО» и «Аптека».
 import {
+  attr,
   blankRow,
   listSheets,
   openXlsx,
@@ -160,9 +161,12 @@ function extendRanges(xml: string, firstData: number, lastRow: number) {
  */
 function fillSheet(sheet: BaseSheet, records: BaseRecord[]) {
   const first = sheet.header + 1;
-  const byNum = new Map(sheet.rows.map((r) => [r.r, r]));
   const fields = Object.entries(sheet.cols) as [BaseField, string][];
   const dataFields = fields.filter(([f]) => f !== 'num');
+  const hasData = (row: Row) =>
+    dataFields.some(([, col]) => row.cells.get(col)?.value);
+  const rows = withPlainExamples(sheet.rows, first, fields, hasData);
+  const byNum = new Map(rows.map((r) => [r.r, r]));
 
   const write = (row: Row, values: BaseRecord) => {
     let xml = row.xml;
@@ -175,7 +179,7 @@ function fillSheet(sheet: BaseSheet, records: BaseRecord[]) {
     return xml;
   };
 
-  const out = new Map<number, string>(sheet.rows.map((r) => [r.r, r.xml]));
+  const out = new Map<number, string>(rows.map((r) => [r.r, r.xml]));
   records.forEach((rec, i) => {
     const r = first + i;
     const row =
@@ -188,9 +192,9 @@ function fillSheet(sheet: BaseSheet, records: BaseRecord[]) {
 
   // ниже записей — стираем то, что было в колонках базы (пример руководителя)
   const lastRow = first + records.length - 1;
-  for (const row of sheet.rows) {
+  for (const row of rows) {
     if (row.r <= lastRow || row.r < first) continue;
-    if (!dataFields.some(([, col]) => row.cells.get(col)?.value)) continue;
+    if (!hasData(row)) continue;
     const blank: BaseRecord = {};
     for (const [field] of dataFields) blank[field] = '';
     out.set(row.r, write(row, blank));
@@ -205,6 +209,40 @@ function fillSheet(sheet: BaseSheet, records: BaseRecord[]) {
     () => `<sheetData>${rowsXml}</sheetData>`,
   );
   return extendRanges(xml, first, Math.max(lastRow, first));
+}
+
+/**
+ * Строка-пример руководителя оформлена иначе (красный шрифт, заливка) — в
+ * неё пойдёт настоящий врач, поэтому её ячейкам в колонках базы даём
+ * оформление ближайшей подготовленной пустой строки ниже.
+ */
+function withPlainExamples(
+  rows: Row[],
+  first: number,
+  fields: [BaseField, string][],
+  hasData: (row: Row) => boolean,
+) {
+  return rows.map((row, i) => {
+    if (row.r < first || !hasData(row)) return row;
+    const source = rows
+      .slice(i + 1)
+      .find((r) => !hasData(r) && fields.some(([, c]) => r.cells.has(c)));
+    if (!source) return row;
+    let xml = row.xml;
+    const cells = new Map(row.cells);
+    for (const [, col] of fields) {
+      const cell = row.cells.get(col);
+      const s = attr(source.cells.get(col)?.attrs ?? '', 's');
+      if (!cell || s === undefined || attr(cell.attrs, 's') === s) continue;
+      const attrs = /\ss="/.test(cell.attrs)
+        ? cell.attrs.replace(/\ss="[^"]*"/, ` s="${s}"`)
+        : `${cell.attrs} s="${s}"`;
+      const cellXml = `<c${attrs}${cell.xml.slice(2 + cell.attrs.length)}`;
+      xml = xml.replace(cell.xml, () => cellXml);
+      cells.set(col, { ...cell, attrs, xml: cellXml });
+    }
+    return { ...row, xml, cells };
+  });
 }
 
 export interface BaseData {
@@ -234,7 +272,7 @@ export async function fillBase(
       ...r,
       mp: data.mp,
       city: sheet.city,
-      potential: '',
+      potential: r.potential ?? '',
     }));
     zip.file(sheet.path, fillSheet(sheet, records), { createFolders: false });
     counts[sheet.kind] = records.length;

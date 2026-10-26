@@ -13,6 +13,7 @@ import { notifications } from '@mantine/notifications';
 import {
   IconAddressBook,
   IconChevronRight,
+  IconTableExport,
   IconSend,
   IconCircleCheck,
   IconCopy,
@@ -92,11 +93,23 @@ export function MorePage() {
 
       <Button
         component={Link}
-        to="/more/base"
+        to="/more/directory"
         variant="light"
         size="lg"
         justify="space-between"
         leftSection={<IconAddressBook />}
+        rightSection={<IconChevronRight size={20} />}
+      >
+        Справочник врачей и аптек
+      </Button>
+
+      <Button
+        component={Link}
+        to="/more/base"
+        variant="light"
+        size="lg"
+        justify="space-between"
+        leftSection={<IconTableExport />}
         rightSection={<IconChevronRight size={20} />}
       >
         База врачей и аптек

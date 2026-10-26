@@ -1,14 +1,9 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { PlaceKind, Prisma, VisitKind } from '@prisma/client';
+import { PlaceKind, Potential, Prisma, VisitKind } from '@prisma/client';
 import { fromIsoDate } from '../common/dates';
 import { addressMatch, placeMatch } from '../common/place-match';
 import { PrismaService } from '../prisma/prisma.service';
-import {
-  CreateContactDto,
-  CreatePlaceDto,
-  UpdateContactDto,
-  UpdatePlaceDto,
-} from './directory.dto';
+import { CreateContactDto, CreatePlaceDto } from './directory.dto';
 
 type Tx = Prisma.TransactionClient;
 
@@ -40,11 +35,6 @@ export class DirectoryService {
 
   createPlace(userId: string, dto: CreatePlaceDto) {
     return this.prisma.place.create({ data: { ...dto, userId } });
-  }
-
-  async updatePlace(userId: string, id: string, dto: UpdatePlaceDto) {
-    await this.ownPlace(userId, id);
-    return this.prisma.place.update({ where: { id }, data: dto });
   }
 
   async deletePlace(userId: string, id: string) {
@@ -82,6 +72,7 @@ export class DirectoryService {
           placeId: true,
           lastAgreement: true,
           lastAgreementDate: true,
+          potential: true,
         },
         orderBy: { updatedAt: 'desc' },
       }),
@@ -106,16 +97,6 @@ export class DirectoryService {
     if (dto.placeId) await this.ownPlace(userId, dto.placeId);
     return this.prisma.contact.create({
       data: { ...dto, userId },
-      include: contactInclude,
-    });
-  }
-
-  async updateContact(userId: string, id: string, dto: UpdateContactDto) {
-    await this.ownContact(userId, id);
-    if (dto.placeId) await this.ownPlace(userId, dto.placeId);
-    return this.prisma.contact.update({
-      where: { id },
-      data: dto,
       include: contactInclude,
     });
   }
@@ -147,6 +128,7 @@ export class DirectoryService {
       phone?: string | null;
       date?: string | Date;
       agreement?: string | null;
+      potential?: Potential | null;
     },
     mode: 'overwrite' | 'fillMissing' = 'overwrite',
   ): Promise<string | null> {
@@ -170,28 +152,36 @@ export class DirectoryService {
         ? { lastAgreement: v.agreement, lastAgreementDate: visitDate }
         : {};
     const onPlace = v.kind === VisitKind.PHARMACY && !!v.placeName;
+    // потенциал — у врача; с визита не старее уже известного (как договорённость),
+    // импорт старых строк только дописывает пустой
+    const potentialFor = (
+      known?: {
+        potential: Potential | null;
+        potentialDate: Date | null;
+      } | null,
+    ) => {
+      if (!v.potential || v.kind !== VisitKind.DOCTOR) return {};
+      const fresher =
+        mode === 'overwrite'
+          ? !known?.potentialDate ||
+            !visitDate ||
+            known.potentialDate <= visitDate
+          : !known?.potential;
+      return fresher
+        ? { potential: v.potential, potentialDate: visitDate ?? null }
+        : {};
+    };
 
     let placeId: string | undefined;
     if (v.placeName) {
       const kind = placeKindFor(v.kind);
-      // одно место — название И адрес: у сети аптек одно название на много
-      // адресов. Адрес совпал — это оно; у места нет адреса — допишем; адреса
-      // разные — другой филиал, новое место. Без адреса — последнее по времени.
-      const sameName = await tx.place.findMany({
-        where: {
-          userId,
-          kind,
-          name: { equals: v.placeName, mode: 'insensitive' },
-        },
-        orderBy: { updatedAt: 'desc' },
-      });
-      const place = v.address?.trim()
-        ? sameName
-            .map((p) => ({ p, score: addressMatch(v.address, p.address) }))
-            .filter((c) => c.score > 0)
-            // точное совпадение адреса раньше, чем «у места адреса нет»
-            .sort((a, b) => b.score - a.score)[0]?.p
-        : sameName[0];
+      const place = await this.findPlace(
+        tx,
+        userId,
+        kind,
+        v.placeName,
+        v.address,
+      );
       placeId = place
         ? (
             await tx.place.update({
@@ -228,6 +218,7 @@ export class DirectoryService {
       phone: prefer(phone, contact?.phone),
       placeId: prefer(placeId, contact?.placeId),
       ...(!onPlace && agreementFor(contact?.lastAgreementDate)),
+      ...potentialFor(contact),
     };
     const saved = contact
       ? await tx.contact.update({ where: { id: contact.id }, data })
@@ -235,6 +226,31 @@ export class DirectoryService {
           data: { ...data, userId, fullName: v.fullName },
         });
     return saved.id;
+  }
+
+  /**
+   * Одно место — название И адрес: у сети аптек одно название на много
+   * адресов. Адрес совпал — это оно; у места нет адреса — тоже оно (адрес
+   * допишут); адреса разные — другой филиал. Без адреса — последнее по времени.
+   */
+  async findPlace(
+    tx: Tx,
+    userId: string,
+    kind: PlaceKind,
+    name: string,
+    address?: string | null,
+  ) {
+    const sameName = await tx.place.findMany({
+      where: { userId, kind, name: { equals: name, mode: 'insensitive' } },
+      orderBy: { updatedAt: 'desc' },
+    });
+    return address?.trim()
+      ? sameName
+          .map((p) => ({ p, score: addressMatch(address, p.address) }))
+          .filter((c) => c.score > 0)
+          // точное совпадение адреса раньше, чем «у места адреса нет»
+          .sort((a, b) => b.score - a.score)[0]?.p
+      : sameName[0];
   }
 
   // ─── уборка ───────────────────────────────────────────────────────────────
@@ -248,14 +264,22 @@ export class DirectoryService {
    *
    * Место — без врачей и без живого визита с тем же названием и адресом
    * (у места нет прямой связи с визитами — сверяем, как при заведении).
+   *
+   * Что правили руками в «Справочнике» (правка, потенциал, «не включать
+   * в базу»), не трогаем: этого может не быть ни в одном визите.
    */
   async pruneUnused() {
     const contacts = await this.prisma.contact.deleteMany({
-      where: { visits: { none: { deletedAt: null } } },
+      where: {
+        visits: { none: { deletedAt: null } },
+        editedAt: null,
+        potential: null,
+        hiddenFromBase: false,
+      },
     });
 
     const empty = await this.prisma.place.findMany({
-      where: { contacts: { none: {} } },
+      where: { contacts: { none: {} }, hiddenFromBase: false },
       select: { id: true, userId: true, kind: true, name: true, address: true },
     });
     if (!empty.length) return { contacts: contacts.count, places: 0 };

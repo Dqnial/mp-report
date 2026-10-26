@@ -1,4 +1,4 @@
-import { expect, type Page } from '@playwright/test';
+import { expect, type APIRequestContext, type Page } from '@playwright/test';
 import JSZip from 'jszip';
 
 /** Учётная запись для тестов — создаётся перед прогоном (npm run user:create). */
@@ -45,8 +45,9 @@ const cell = (ref: string, text?: string) =>
  * Вымышленный шаблон текущего месяца — устроен как настоящий: блок строк на
  * день, дата в D, № в B, «Врач»/«Аптека» в C, план (ЛПУ и адрес) в E/F.
  * Дни — все дни месяца (и выходные), чтобы тесты шли в любой день.
+ * filled — строка, уже заполненная в Excel (первая строка плана этого дня).
  */
-export async function makeTemplate() {
+export async function makeTemplate(filled?: { day: number; fullName: string }) {
   const now = new Date();
   const y = now.getFullYear();
   const m = now.getMonth();
@@ -75,7 +76,11 @@ export async function makeTemplate() {
         cell(`D${r}`, i ? undefined : `${pad(d)}.${pad(m + 1)}.${y}`) +
         cell(`E${r}`, s.place) +
         cell(`F${r}`, s.address) +
-        ['G', 'H', 'I', 'J', 'K', 'L', 'M', 'N']
+        cell(
+          `G${r}`,
+          filled?.day === d && i === 0 ? filled.fullName : undefined,
+        ) +
+        ['H', 'I', 'J', 'K', 'L', 'M', 'N']
           .map((c) => cell(`${c}${r}`))
           .join('') +
         `</row>`;
@@ -156,6 +161,33 @@ export async function makeBase() {
       { name: 'База аптек', xml: `<sheetData>${pharmacies}</sheetData>` },
     ]),
   };
+}
+
+/**
+ * Загрузить шаблон через API и дождаться фонового импорта строк из файла
+ * (с Redis он идёт в очереди, без — сразу в запросе).
+ */
+export async function uploadTemplate(
+  request: APIRequestContext,
+  file: Awaited<ReturnType<typeof makeTemplate>>,
+) {
+  const res = await request.post('/api/templates', { multipart: { file } });
+  expect(res.ok()).toBe(true);
+  const { import: started } = (await res.json()) as {
+    import?: { status: string; jobId?: string };
+  };
+  if (started?.status !== 'queued') return;
+  await expect
+    .poll(
+      async () =>
+        (
+          (await (
+            await request.get(`/api/templates/import/${started.jobId}`)
+          ).json()) as { status: string }
+        ).status,
+      { timeout: 30_000 },
+    )
+    .toBe('done');
 }
 
 const COLS = 'ABCDEFGHIJ';

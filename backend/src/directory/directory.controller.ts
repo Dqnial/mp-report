@@ -17,16 +17,20 @@ import {
   CreatePlaceDto,
   PlaceSearchQuery,
   SearchQuery,
-  UpdateContactDto,
-  UpdatePlaceDto,
+  EditContactDto,
+  EditPlaceDto,
 } from './directory.dto';
+import { DirectoryEditService } from './directory-edit.service';
 import { DirectoryService } from './directory.service';
 
 @ApiTags('directory')
 @ApiCookieAuth()
 @Controller('places')
 export class PlacesController {
-  constructor(private readonly directory: DirectoryService) {}
+  constructor(
+    private readonly directory: DirectoryService,
+    private readonly editor: DirectoryEditService,
+  ) {}
 
   @Get()
   search(@CurrentUser() user: AuthUser, @Query() query: PlaceSearchQuery) {
@@ -38,13 +42,14 @@ export class PlacesController {
     return this.directory.createPlace(user.id, dto);
   }
 
+  /** Правка места (название, адрес, «не включать в базу»). */
   @Patch(':id')
   update(
     @CurrentUser() user: AuthUser,
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: UpdatePlaceDto,
+    @Body() dto: EditPlaceDto,
   ) {
-    return this.directory.updatePlace(user.id, id, dto);
+    return this.editor.editPlace(user.id, id, dto);
   }
 
   @Delete(':id')
@@ -57,20 +62,36 @@ export class PlacesController {
   }
 }
 
+@ApiTags('directory')
+@ApiCookieAuth()
 @Controller('directory')
 export class DirectoryController {
-  constructor(private readonly directory: DirectoryService) {}
+  constructor(
+    private readonly directory: DirectoryService,
+    private readonly editor: DirectoryEditService,
+  ) {}
 
   /** Весь справочник — для офлайн-подсказок на телефоне. */
   @Get()
   all(@CurrentUser() user: AuthUser) {
     return this.directory.all(user.id);
   }
+
+  /** Экран «Справочник»: врачи и аптеки как в базе, с числом визитов. */
+  @Get('entries')
+  entries(@CurrentUser() user: AuthUser) {
+    return this.editor.entries(user.id);
+  }
 }
 
+@ApiTags('directory')
+@ApiCookieAuth()
 @Controller('contacts')
 export class ContactsController {
-  constructor(private readonly directory: DirectoryService) {}
+  constructor(
+    private readonly directory: DirectoryService,
+    private readonly editor: DirectoryEditService,
+  ) {}
 
   @Get()
   search(@CurrentUser() user: AuthUser, @Query() query: SearchQuery) {
@@ -82,13 +103,14 @@ export class ContactsController {
     return this.directory.createContact(user.id, dto);
   }
 
+  /** Правка врача/провизора; с fixVisitsFrom — и тех же значений в визитах. */
   @Patch(':id')
   update(
     @CurrentUser() user: AuthUser,
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: UpdateContactDto,
+    @Body() dto: EditContactDto,
   ) {
-    return this.directory.updateContact(user.id, id, dto);
+    return this.editor.editContact(user.id, id, dto);
   }
 
   @Delete(':id')

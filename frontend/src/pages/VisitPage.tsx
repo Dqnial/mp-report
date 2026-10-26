@@ -26,8 +26,8 @@ import {
   IconAlertTriangle,
   IconArrowLeft,
   IconBuildingStore,
+  IconFileSpreadsheet,
   IconStethoscope,
-  IconLock,
   IconTrash,
 } from '@tabler/icons-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -41,7 +41,8 @@ import {
   useUserId,
   useVisit,
 } from '../api/queries';
-import type { VisitKind, VisitProduct } from '../api/types';
+import type { Potential, VisitKind, VisitProduct } from '../api/types';
+import { PotentialPicker } from '../components/PotentialPicker';
 import { newClientId } from '../clientId';
 import type { LocalVisit } from '../offline/db';
 import { findPlace } from '../offline/local';
@@ -82,8 +83,6 @@ export function VisitPage() {
       </Center>
     );
   }
-  if (existing.data?.fromFile) return <FileVisitView visit={existing.data} />;
-
   const kind = (existing.data?.kind ??
     (params.get('kind') === 'PHARMACY' ? 'PHARMACY' : 'DOCTOR')) as VisitKind;
 
@@ -118,6 +117,7 @@ interface FormValues {
   agreement: string;
   fact: string;
   deviation: string;
+  potential: Potential | null;
 }
 
 function initialValues(
@@ -139,6 +139,7 @@ function initialValues(
       agreement: visit.agreement ?? '',
       fact: visit.fact ?? '',
       deviation: visit.deviation ?? '',
+      potential: visit.potential ?? null,
     };
   }
   // ЛПУ «залипает»: врачей обходят по несколько в одной поликлинике подряд.
@@ -157,6 +158,7 @@ function initialValues(
     agreement: '',
     fact: '',
     deviation: '',
+    potential: null,
   };
 }
 
@@ -242,6 +244,10 @@ function VisitForm({
     });
     if (values.kind === 'DOCTOR') {
       carryAgreement(c.lastAgreement, c.lastAgreementDate, 'contact');
+      // потенциал — известный по врачу, если на этом визите ещё не отмечали
+      if (!visit && !form.getValues().potential && c.potential) {
+        form.setFieldValue('potential', c.potential);
+      }
     }
   };
 
@@ -354,6 +360,7 @@ function VisitForm({
           agreement: clean(v.agreement),
           fact: clean(v.fact),
           deviation: clean(v.deviation),
+          potential: v.kind === 'DOCTOR' ? v.potential : null,
         },
       },
       {
@@ -374,7 +381,10 @@ function VisitForm({
   // мгновенное). Если ждать его окончания, форма успевала перечитать уже
   // удалённый визит и на миг показывала «Визит не найден».
   const onDelete = () => {
-    if (!visit || !window.confirm('Удалить визит?')) return;
+    const question = visit?.fromFile
+      ? 'Удалить визит? Его строка в отчёте очистится.'
+      : 'Удалить визит?';
+    if (!visit || !window.confirm(question)) return;
     remove.mutate(visit);
     navigate(dayPath(date), { replace: true });
   };
@@ -412,6 +422,13 @@ function VisitForm({
             </ActionIcon>
           )}
         </Group>
+
+        {visit?.fromFile && (
+          <Alert color="gray" icon={<IconFileSpreadsheet />}>
+            Визит из файла отчёта (строка {visit.templateRow}). Исправление
+            перепишет эту строку в отчёте, удаление — очистит её.
+          </Alert>
+        )}
 
         {visit?.syncState === 'error' && (
           <Alert
@@ -451,6 +468,8 @@ function VisitForm({
               ),
             },
           ]}
+          // строка визита из файла — в блоке «Врач» или «Аптека» своего дня
+          disabled={visit?.fromFile}
           {...form.getInputProps('kind')}
         />
 
@@ -526,8 +545,22 @@ function VisitForm({
           />
         </SimpleGrid>
 
+        {!isPharmacy && (
+          <PotentialPicker
+            value={values.potential}
+            onChange={(p) => form.setFieldValue('potential', p)}
+            description="Попадёт в базу врачей"
+          />
+        )}
+
         <Stack gap={6}>
           <Text fw={500}>Препараты</Text>
+          {visit?.productsRaw && (
+            <Text size="xs" c="dimmed">
+              В файле: {visit.productsRaw}. Не меняйте выбор — в отчёте
+              останется так, как в файле.
+            </Text>
+          )}
           <Chip.Group multiple value={selected} onChange={toggleProducts}>
             <SimpleGrid cols={2} spacing="xs">
               {PRODUCTS.map((p) => (
@@ -708,61 +741,6 @@ function PharmacyRow({
           />
         ))}
       </SimpleGrid>
-    </Stack>
-  );
-}
-
-/** Визит, импортированный из файла: только просмотр. */
-function FileVisitView({ visit: v }: { visit: LocalVisit }) {
-  const navigate = useNavigate();
-  const rows: [string, string | null][] = [
-    [v.kind === 'PHARMACY' ? 'Аптека' : 'ЛПУ', v.placeName],
-    ['Адрес', v.address],
-    ['ФИО', v.fullName],
-    ['Специальность', v.specialty],
-    ['Телефон', v.phone],
-    ['Препараты', v.productsRaw ?? v.products.map(productText).join(', ')],
-    ['Комментарий', v.comment],
-    ['Договорённость', v.agreement],
-    ['Факт выполнения', v.fact],
-    ['Отклонение', v.deviation],
-  ];
-  return (
-    <Stack gap="md" p="md">
-      <Group gap="xs" wrap="nowrap">
-        <ActionIcon
-          variant="subtle"
-          size="xl"
-          aria-label="Назад"
-          onClick={() => navigate(-1)}
-        >
-          <IconArrowLeft />
-        </ActionIcon>
-        <Stack gap={0}>
-          <Title order={3}>Визит</Title>
-          <Text size="sm" c="dimmed">
-            {formatDay(v.date)}
-          </Text>
-        </Stack>
-      </Group>
-      <Alert icon={<IconLock />} color="gray">
-        Этот визит уже записан в файле отчёта (строка {v.templateRow}). Чтобы
-        исправить — поправьте файл в Excel и загрузите его заново.
-      </Alert>
-      <Paper withBorder p="md">
-        <Stack gap="sm">
-          {rows
-            .filter(([, value]) => value)
-            .map(([label, value]) => (
-              <div key={label}>
-                <Text size="sm" c="dimmed">
-                  {label}
-                </Text>
-                <Text>{value}</Text>
-              </div>
-            ))}
-        </Stack>
-      </Paper>
     </Stack>
   );
 }

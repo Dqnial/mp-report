@@ -31,7 +31,10 @@ function doctorRow(r: number, n: number, example?: string[]) {
   return (
     `<row r="${r}" spans="1:12">` +
     [...COLS]
-      .map((c, i) => t(`${c}${r}`, 5, i === 0 ? String(n) : example?.[i]))
+      // строка-пример у руководителя выделена (красный шрифт) — стиль 9
+      .map((c, i) =>
+        t(`${c}${r}`, example ? 9 : 5, i === 0 ? String(n) : example?.[i]),
+      )
       .join('') +
     (r === 3 ? t(`L${r}`, 6, 'Справка') : '') +
     `</row>`
@@ -174,6 +177,11 @@ describe('база врачей и аптек', () => {
       L: 'Справка', // справочная табличка сбоку не тронута
     });
     expect(values[7]).toMatchObject({ A: '5', D: 'Врачовад Анна' });
+    // в строке-примере — обычное оформление, как у подготовленных строк
+    expect(styles.A3).toBe('5');
+    expect(styles.D3).toBe('5');
+    expect(styles.J3).toBe('5');
+    expect(styles.L3).toBe('6'); // табличка сбоку — как была
     // новые строки — с оформлением строки выше
     expect(styles.D6).toBe('5');
     expect(styles.J7).toBe('5');

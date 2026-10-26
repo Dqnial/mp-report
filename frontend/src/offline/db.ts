@@ -2,7 +2,7 @@
 // записывается сюда, и только потом уходит на сервер; из очереди отправки
 // запись удаляется лишь после ответа сервера «принял».
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
-import type { VisitKind, VisitProduct } from '../api/types';
+import type { Potential, VisitKind, VisitProduct } from '../api/types';
 
 export type SyncState = 'synced' | 'pending' | 'error';
 
@@ -27,6 +27,8 @@ export interface LocalVisit {
   agreement: string | null;
   fact: string | null;
   deviation: string | null;
+  /** врач: потенциал (у визитов, сохранённых до появления поля, — нет) */
+  potential?: Potential | null;
   templateRow: number | null;
   fromFile: boolean;
   createdAt: string;
@@ -52,6 +54,7 @@ export type VisitPayload = Pick<
   | 'agreement'
   | 'fact'
   | 'deviation'
+  | 'potential'
 >;
 
 /** Операция в очереди отправки. Выполняются строго по порядку. */

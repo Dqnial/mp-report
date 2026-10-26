@@ -19,6 +19,7 @@ import type { Response } from 'express';
 import { CurrentUser, type AuthUser } from '../auth/current-user.decorator';
 import {
   CLIENT_ID_RE,
+  IMPORTED_CLIENT_ID_RE,
   CreateVisitDto,
   SyncDeleteQuery,
   SyncVisitDto,
@@ -28,9 +29,12 @@ import {
 } from './visits.dto';
 import { VisitsService } from './visits.service';
 
+/** Визиты из файла тоже правят с телефона — у них свой формат clientId. */
 class ClientIdPipe implements PipeTransform<string, string> {
   transform(value: string) {
-    if (!CLIENT_ID_RE.test(value)) throw new BadRequestException('clientId');
+    if (!CLIENT_ID_RE.test(value) && !IMPORTED_CLIENT_ID_RE.test(value)) {
+      throw new BadRequestException('clientId');
+    }
     return value;
   }
 }

@@ -633,7 +633,87 @@ interface FillPlan {
   placed: number;
 }
 
-async function planFill(file: Buffer, visits: VisitCells[]): Promise<FillPlan> {
+/**
+ * Визит «из файла», исправленный или удалённый в приложении: его строка в
+ * шаблоне уже заполнена, и экспорт её перезаписывает.
+ */
+export interface FileRowEdit {
+  /** номер строки в шаблоне */
+  row: number;
+  /** null — визит удалили: колонки визита в строке очищаются */
+  visit: VisitCells | null;
+  /** препараты не правили — J–M как в файле (там бывает то, что не распознали) */
+  keepProducts?: boolean;
+}
+
+/**
+ * Перезапись строк исправленных визитов «из файла». План в строке (E/F)
+ * остаётся, если визит в том же месте; другое место — пишем его в строку,
+ * а строке ниже «там же» возвращаем прежнее ЛПУ, чтобы она не переехала.
+ */
+function applyFileEdits(
+  edits: FileRowEdit[],
+  days: Map<string, DayBlock>,
+  insertions: Insertion[],
+  finalEdits: Map<number, Map<string, string>>,
+  rowVisit: Map<number, string>,
+) {
+  const slotAt = new Map<number, { day: DayBlock; i: number }>();
+  for (const day of days.values()) {
+    day.slots.forEach((s, i) => slotAt.set(s.row, { day, i }));
+  }
+  const putAt = (row: number, put: Map<string, string>) => {
+    const to = shiftRow(row, insertions);
+    finalEdits.set(to, new Map([...(finalEdits.get(to) ?? []), ...put]));
+    return to;
+  };
+
+  for (const { row, visit: v, keepProducts } of edits) {
+    const at = slotAt.get(row);
+    if (!at) continue; // в этом шаблоне такой строки нет
+    const slot = at.day.slots[at.i];
+    const put = new Map<string, string>([
+      [VISIT_COLS.fullName, v?.fullName?.trim() ?? ''],
+      [VISIT_COLS.specialty, v?.specialty?.trim() ?? ''],
+      [VISIT_COLS.phone, v?.phone?.trim() ?? ''],
+      [VISIT_COLS.comment, v?.comment?.trim() ?? ''],
+    ]);
+    if (!v || !keepProducts) {
+      VISIT_COLS.products.forEach((c, i) => put.set(c, v?.products[i] ?? ''));
+    }
+    const moved =
+      !!v?.placeName?.trim() &&
+      placeMatch(
+        { name: v.placeName, address: v.address },
+        { name: slot.groupPlace, address: slot.groupAddress },
+      ) === 0;
+    if (v && moved) {
+      put.set(VISIT_COLS.placeName, v.placeName!.trim());
+      put.set(VISIT_COLS.address, v.address?.trim() ?? '');
+      const next = at.day.slots[at.i + 1];
+      const nextUsed =
+        next && (!next.free || finalEdits.has(shiftRow(next.row, insertions)));
+      if (nextUsed && !next.plannedPlace && slot.groupPlace) {
+        putAt(
+          next.row,
+          new Map([
+            [VISIT_COLS.placeName, slot.groupPlace],
+            [VISIT_COLS.address, slot.groupAddress],
+          ]),
+        );
+      }
+    }
+    const to = putAt(row, put);
+    if (v?.id) rowVisit.set(to, v.id);
+    else rowVisit.delete(to);
+  }
+}
+
+async function planFill(
+  file: Buffer,
+  visits: VisitCells[],
+  fileEdits: FileRowEdit[] = [],
+): Promise<FillPlan> {
   const sheet = await loadVisitSheet(file);
   const days = new Map(findDays(sheet.rows, sheet.xml).map((d) => [d.date, d]));
   const rowsByNum = new Map(sheet.rows.map((r) => [r.r, r]));
@@ -756,16 +836,19 @@ async function planFill(file: Buffer, visits: VisitCells[]): Promise<FillPlan> {
     }
     for (const [r, id] of ids) rowVisit.set(r + before, id);
   }
+  applyFileEdits(fileEdits, days, insertions, finalEdits, rowVisit);
   return { sheet, days, insertions, finalEdits, rowVisit, warnings, placed };
 }
 
 export async function fillTemplate(
   file: Buffer,
   visits: VisitCells[],
+  fileEdits: FileRowEdit[] = [],
 ): Promise<FillResult> {
   const { sheet, insertions, finalEdits, warnings, placed } = await planFill(
     file,
     visits,
+    fileEdits,
   );
 
   // каждая колонка правится один раз, так что исходная разметка остальных
@@ -863,9 +946,10 @@ export async function previewDay(
   file: Buffer,
   visits: VisitCells[],
   date: string,
+  fileEdits: FileRowEdit[] = [],
 ): Promise<DayPreview> {
   const { sheet, days, insertions, finalEdits, rowVisit, warnings } =
-    await planFill(file, visits);
+    await planFill(file, visits, fileEdits);
   const dayWarnings = warnings.filter((w) => w.startsWith(`${fmt(date)}:`));
   const day = days.get(date);
   if (!day) {
@@ -890,9 +974,8 @@ export async function previewDay(
       PREVIEW_COLS.map((c) => [c, value(c)]),
     ) as Record<PreviewCol, string>;
     const visitId = rowVisit.get(r);
-    const filledInFile = VISIT_DATA_COLS.some(
-      (c) => !!src?.cells.get(c)?.value,
-    );
+    // с учётом правок: удалённый визит «из файла» оставляет строку пустой
+    const filledInFile = VISIT_DATA_COLS.some((c) => !!value(c));
     rows.push({
       row: r,
       num: src?.cells.get('B')?.value ?? '',

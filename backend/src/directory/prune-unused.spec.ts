@@ -57,7 +57,13 @@ describe('чистка справочника', () => {
     const { service, contactsDelete } = setup();
     await service.pruneUnused();
     expect(contactsDelete).toHaveBeenCalledWith({
-      where: { visits: { none: { deletedAt: null } } },
+      where: {
+        visits: { none: { deletedAt: null } },
+        // правленное вручную в «Справочнике» не трогаем
+        editedAt: null,
+        potential: null,
+        hiddenFromBase: false,
+      },
     });
   });
 

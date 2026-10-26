@@ -83,11 +83,12 @@ export class BaseService {
     const live = { deletedAt: null };
     const [contacts, pharmacies, pharmacyVisits] = await Promise.all([
       this.prisma.contact.findMany({
-        where: { userId, visits: { some: live } },
+        where: { userId, hiddenFromBase: false, visits: { some: live } },
         select: {
           fullName: true,
           specialty: true,
           phone: true,
+          potential: true,
           place: {
             select: { id: true, kind: true, name: true, address: true },
           },
@@ -100,8 +101,14 @@ export class BaseService {
       }),
       // аптеки, где провизор не записан, — строкой без ФИО
       this.prisma.place.findMany({
-        where: { userId, kind: 'PHARMACY' },
-        select: { id: true, name: true, address: true },
+        where: { userId, kind: 'PHARMACY', hiddenFromBase: false },
+        select: {
+          id: true,
+          name: true,
+          address: true,
+          // и скрытые из базы: аптека со скрытым провизором — не «пустая»
+          contacts: { select: { fullName: true } },
+        },
       }),
       this.prisma.visit.findMany({
         where: { userId, kind: 'PHARMACY', ...live, placeName: { not: null } },
@@ -115,13 +122,8 @@ export class BaseService {
       pharmacyVisits.some(
         (v) => placeMatch({ name: v.placeName, address: v.address }, p) > 0,
       );
-    const withPharmacist = new Set(
-      contacts.flatMap((c) =>
-        c.fullName.trim() && c.place ? [c.place.id] : [],
-      ),
-    );
     const emptyPharmacies = pharmacies.filter(
-      (p) => !withPharmacist.has(p.id) && visited(p),
+      (p) => !p.contacts.some((c) => c.fullName.trim()) && visited(p),
     );
 
     // свежие (по последнему визиту) — первыми: при слиянии повторов они главнее

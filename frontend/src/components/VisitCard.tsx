@@ -4,7 +4,7 @@ import {
   IconBuildingHospital,
   IconBuildingStore,
   IconClockHour4,
-  IconLock,
+  IconFileSpreadsheet,
   IconMapPin,
   IconMessage,
   IconPhone,
@@ -21,7 +21,8 @@ import classes from './VisitCard.module.css';
  * Карточка визита: у каждого поля своё место и значок — ФИО крупно, ЛПУ/аптека,
  * адрес, телефон, препараты. Пустое поле не подменяется другим (раньше без ФИО
  * на его месте стояло название аптеки), а пишется серым «нет …».
- * У визитов «из файла» пустые поля не показываем: их всё равно не поправить здесь.
+ * У визитов «из файла» пустые поля не показываем: их заполняли в Excel до
+ * приложения, и пустое там — обычное дело.
  */
 export function VisitCard({
   visit: v,
@@ -95,7 +96,12 @@ export function VisitCard({
               </Badge>
             )}
             {v.fromFile && (
-              <IconLock size={16} color="gray" style={{ flexShrink: 0 }} />
+              <IconFileSpreadsheet
+                size={16}
+                color="gray"
+                aria-label="из файла"
+                style={{ flexShrink: 0 }}
+              />
             )}
             {v.syncState === 'pending' && (
               <IconClockHour4

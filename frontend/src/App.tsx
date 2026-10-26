@@ -17,6 +17,7 @@ import { startSync } from './offline/sync';
 import { Layout } from './components/Layout';
 import { BasePage } from './pages/BasePage';
 import { DayPage } from './pages/DayPage';
+import { DirectoryPage } from './pages/DirectoryPage';
 import { InvitePage } from './pages/InvitePage';
 import { LoginPage } from './pages/LoginPage';
 import { MorePage } from './pages/MorePage';
@@ -103,6 +104,7 @@ export function App() {
         <Route path="/report/preview" element={<PreviewPage />} />
         <Route path="/more" element={<MorePage />} />
         <Route path="/more/base" element={<BasePage />} />
+        <Route path="/more/directory" element={<DirectoryPage />} />
       </Route>
       {/* форма — на весь экран, без нижнего меню; «Назад» на Android её закрывает */}
       <Route path="/visit/new" element={<VisitPage />} />

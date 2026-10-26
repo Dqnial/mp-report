@@ -1,5 +1,5 @@
 import { OmitType, PartialType } from '@nestjs/mapped-types';
-import { VisitKind } from '@prisma/client';
+import { Potential, VisitKind } from '@prisma/client';
 import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
@@ -23,6 +23,9 @@ export { VisitProductDto };
 
 /** clientId визитов с телефона (у импортированных из файла — свой формат tpl:…). */
 export const CLIENT_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
+
+/** clientId визита, прочитанного из шаблона: tpl:<userId>:<месяц>:<строка>. */
+export const IMPORTED_CLIENT_ID_RE = /^tpl:[0-9a-f-]{36}:\d{4}-\d{2}:\d{1,5}$/;
 
 export class CreateVisitDto {
   /** генерится на телефоне: повторная отправка того же визита не создаст дубль */
@@ -103,6 +106,11 @@ export class CreateVisitDto {
   @IsString()
   @MaxLength(300)
   deviation?: string;
+
+  /** врач: потенциал (уходит в справочник и в «Базу врачей») */
+  @IsOptional()
+  @IsEnum(Potential)
+  potential?: Potential;
 }
 
 export class UpdateVisitDto extends PartialType(

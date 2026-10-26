@@ -1,5 +1,5 @@
 // Чтение из памяти телефона — экраны работают одинаково с сетью и без неё.
-import type { Me, VisitKind } from '../api/types';
+import type { Me, Potential, VisitKind } from '../api/types';
 import { addressMatch } from '../placeMatch';
 import { db, kvDelete, kvGet, kvSet, type LocalVisit } from './db';
 
@@ -59,6 +59,7 @@ export interface DirContact {
   /** последняя договорённость с врачом и дата визита, когда договорились */
   lastAgreement?: string | null;
   lastAgreementDate?: string | null;
+  potential?: Potential | null;
   place?: DirPlace;
 }
 
