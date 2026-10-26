@@ -36,8 +36,11 @@ import {
   syncStatus,
   type ServerVisit,
 } from '../offline/sync';
+import { XLSX_MIME } from '../fileShare';
 import { api, ApiError, apiFetch, UnauthorizedError } from './client';
 import type {
+  BaseStatus,
+  BaseUploaded,
   DayPlan,
   DayPreview,
   ReportFile,
@@ -69,6 +72,7 @@ export const keys = {
   preview: (date: string) =>
     ['report', date.slice(0, 7), 'preview', date] as const,
   invites: ['invites'] as const,
+  base: ['base'] as const,
 };
 
 /** Нет связи с сервером (а не ответ сервера с ошибкой). */
@@ -346,14 +350,6 @@ export const useReportCheck = (month: string, enabled: boolean) =>
     staleTime: 0,
   });
 
-const XLSX_MIME =
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-
-/**
- * Готовый файл отчёта, скачанный заранее. navigator.share нужно вызывать сразу
- * по нажатию — если сначала ждать сеть, браузер отвечает «Permission denied».
- * Ключ вложен в report(month): правка визита сбрасывает и проверку, и файл.
- */
 /** Строки дня как в готовом файле. Считает сервер — тем же кодом, что и отчёт. */
 export const usePreview = (date: string, enabled: boolean) =>
   useQuery({
@@ -366,7 +362,10 @@ export const usePreview = (date: string, enabled: boolean) =>
   });
 
 /**
- * Готовый файл отчёта — по версии из проверки. Файл одной версии не меняется,
+ * Готовый файл отчёта, скачанный заранее: navigator.share нужно вызывать сразу
+ * по нажатию — если сначала ждать сеть, браузер отвечает «Permission denied».
+ *
+ * Файл — по версии из проверки. Файл одной версии не меняется,
  * поэтому повторный заход на экран его не скачивает; новая версия (визиты
  * изменились) — новый ключ, файл скачивается один раз. Старый файл под новой
  * версией не показываем (без placeholderData).
@@ -388,6 +387,43 @@ export const useReportFile = (
     enabled: !!fileName && version !== undefined,
     staleTime: Infinity,
     gcTime: 30 * 60_000,
+  });
+
+// ─── база врачей и аптек (нужен сервер) ─────────────────────────────────────
+
+/** Загружен ли файл базы и сколько врачей и аптек в него попадёт. */
+export const useBaseStatus = () =>
+  useQuery({
+    queryKey: keys.base,
+    queryFn: () => api.get<BaseStatus>('/base'),
+    staleTime: 0,
+  });
+
+export function useUploadBase() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (file: File) => {
+      const fd = new FormData();
+      fd.append('file', file, file.name);
+      return api.post<BaseUploaded>('/base/template', fd);
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.base }),
+  });
+}
+
+/**
+ * Готовая база, скачанная заранее (share — сразу по нажатию). Справочник
+ * пополняется с каждым визитом, поэтому при каждом заходе на экран — свежая.
+ */
+export const useBaseFile = (fileName: string | undefined) =>
+  useQuery({
+    queryKey: [...keys.base, 'file', fileName],
+    queryFn: async () => {
+      const res = await apiFetch('/base/file');
+      return new File([await res.blob()], fileName!, { type: XLSX_MIME });
+    },
+    enabled: !!fileName,
+    staleTime: 0,
   });
 
 // ─── приглашения ────────────────────────────────────────────────────────────

@@ -168,3 +168,18 @@ export interface DayPlan {
   inTemplate: boolean;
   groups: PlanGroup[];
 }
+
+export interface BaseStatus {
+  /** файл «База врачей и аптек» от руководителя; null — ещё не загружен */
+  template: { originalName: string; createdAt: string } | null;
+  doctors: number;
+  pharmacies: number;
+  /** сколько повторов одного врача/провизора свели в одну строку */
+  merged: number;
+}
+
+export interface BaseUploaded {
+  originalName: string;
+  createdAt: string;
+  sheets: { doctors?: { sheet: string }; pharmacies?: { sheet: string } };
+}

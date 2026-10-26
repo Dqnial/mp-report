@@ -24,13 +24,16 @@ export interface VisitProduct {
 
 const LABELS = new Map<string, string>(PRODUCTS.map((p) => [p.code, p.label]));
 
+/** Название препарата, как его пишут в файлах руководителя. */
+export const productLabel = (code: string) => LABELS.get(code) ?? code;
+
 /**
  * Текст препарата для ячейки J–M, как пишут в отчёте:
  * «Коф Йог», только остаток — «Коф Йог 9» (его привычный вид),
  * больше данных — «Коф Йог: ост. 5, прод. 3, заказ 10».
  */
 export function productCellText(p: VisitProduct) {
-  const label = LABELS.get(p.code) ?? p.code;
+  const label = productLabel(p.code);
   const parts = [
     p.stock != null && `ост. ${p.stock}`,
     p.sold != null && `прод. ${p.sold}`,

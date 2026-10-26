@@ -83,13 +83,101 @@ export async function makeTemplate() {
     });
     merges.push(`A${first}:A${r - 1}`);
   }
+  const buffer = await xlsx([
+    {
+      name: 'План и факт',
+      xml:
+        `<sheetData>${rows}</sheetData>` +
+        `<mergeCells count="${merges.length}">${merges.map((x) => `<mergeCell ref="${x}"/>`).join('')}</mergeCells>`,
+    },
+  ]);
+  return {
+    name: `План и факт E2E ${y}-${pad(m + 1)}.xlsx`,
+    mimeType: XLSX_MIME,
+    buffer,
+  };
+}
+
+/**
+ * Вымышленная «База врачей и аптек» как у руководителя: лист врачей (шапка во
+ * 2-й строке, пара подготовленных строк с № и строкой-примером) и лист аптек.
+ */
+export async function makeBase() {
+  const head = (r: number, titles: string[]) =>
+    `<row r="${r}">${titles.map((t, i) => cell(`${COLS[i]}${r}`, t)).join('')}</row>`;
+  const numbered = (
+    r: number,
+    n: number,
+    width: number,
+    example: string[] = [],
+  ) =>
+    `<row r="${r}">${cell(`A${r}`, String(n))}${[...COLS.slice(1, width)]
+      .map((c, i) => cell(`${c}${r}`, example[i]))
+      .join('')}</row>`;
+  const doctors =
+    head(2, [
+      '№',
+      'МП ',
+      'Город Тестоград',
+      'ФИО  Врача',
+      'Специальность',
+      'Сот телефон ',
+      'ЛПУ',
+      'адрес',
+      'Препарата',
+      'Патенциаль',
+    ]) +
+    numbered(3, 1, 10, [
+      'Пример Представитель',
+      'Тестоград',
+      'Образцова Ольга Петровна',
+      'ВОП',
+      '',
+      'ГП Пример',
+      '',
+      '',
+      'Средний',
+    ]) +
+    numbered(4, 2, 10);
+  const pharmacies =
+    head(1, [
+      '№',
+      'ФИО  провизора',
+      'Специальность',
+      'Сот телефон ',
+      'Аптека',
+      'Адрес',
+    ]) + numbered(2, 1, 6);
+  return {
+    name: 'База врачей и аптек E2E.xlsx',
+    mimeType: XLSX_MIME,
+    buffer: await xlsx([
+      { name: 'База врачей', xml: `<sheetData>${doctors}</sheetData>` },
+      { name: 'База аптек', xml: `<sheetData>${pharmacies}</sheetData>` },
+    ]),
+  };
+}
+
+const COLS = 'ABCDEFGHIJ';
+
+const XLSX_MIME =
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+/** Минимальный корректный xlsx из готовых листов (содержимое <worksheet>). */
+async function xlsx(sheets: { name: string; xml: string }[]) {
   const zip = new JSZip();
   zip.file(
     '[Content_Types].xml',
     '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
       '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>' +
       '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
-      '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>',
+      sheets
+        .map(
+          (_, i) =>
+            `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`,
+        )
+        .join('') +
+      '</Types>',
   );
   zip.file(
     '_rels/.rels',
@@ -98,25 +186,31 @@ export async function makeTemplate() {
   );
   zip.file(
     'xl/workbook.xml',
-    '<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
-      '<sheets><sheet name="План и факт" sheetId="1" r:id="rId1"/></sheets></workbook>',
+    '<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>' +
+      sheets
+        .map(
+          (s, i) =>
+            `<sheet name="${s.name}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`,
+        )
+        .join('') +
+      '</sheets></workbook>',
   );
   zip.file(
     'xl/_rels/workbook.xml.rels',
     '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
-      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
+      sheets
+        .map(
+          (_, i) =>
+            `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`,
+        )
+        .join('') +
+      '</Relationships>',
   );
-  zip.file(
-    'xl/worksheets/sheet1.xml',
-    '<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
-      `<sheetData>${rows}</sheetData>` +
-      `<mergeCells count="${merges.length}">${merges.map((x) => `<mergeCell ref="${x}"/>`).join('')}</mergeCells></worksheet>`,
+  sheets.forEach((s, i) =>
+    zip.file(
+      `xl/worksheets/sheet${i + 1}.xml`,
+      `<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${s.xml}</worksheet>`,
+    ),
   );
-  const buffer = await zip.generateAsync({ type: 'nodebuffer' });
-  return {
-    name: `План и факт E2E ${y}-${pad(m + 1)}.xlsx`,
-    mimeType:
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    buffer,
-  };
+  return zip.generateAsync({ type: 'nodebuffer' });
 }

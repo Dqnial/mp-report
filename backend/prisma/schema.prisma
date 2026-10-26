@@ -16,9 +16,10 @@ model User {
   createdAt    DateTime @default(now())
 
   sessions       Session[]
-  invitesCreated Invite[]   @relation("InviteCreatedBy")
-  invitesUsed    Invite[]   @relation("InviteUsedBy")
+  invitesCreated Invite[]      @relation("InviteCreatedBy")
+  invitesUsed    Invite[]      @relation("InviteUsedBy")
   templates      Template[]
+  baseTemplate   BaseTemplate?
   places         Place[]
   contacts       Contact[]
   visits         Visit[]
@@ -72,6 +73,21 @@ model Template {
 
   @@unique([userId, month])
   @@map("templates")
+}
+
+/// Файл «База врачей и аптек» от руководителя — один на пользователя.
+/// Как и шаблон отчёта, хранится нетронутым: справочник вписывается в копию
+/// при каждом скачивании.
+model BaseTemplate {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @unique @db.Uuid
+  originalName String
+  file         Bytes
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("base_templates")
 }
 
 enum PlaceKind {

@@ -65,7 +65,7 @@ npx playwright test
 | Где | Команда | Что делает |
 |---|---|---|
 | backend | `npm run start:dev` | API с перезапуском при изменениях |
-| backend | `npm test` | юнит-тесты Jest (87) |
+| backend | `npm test` | юнит-тесты Jest (96) |
 | backend | `npm run lint` | ESLint |
 | backend | `npm run db:migrate` | новая миграция Prisma |
 | backend | `npm run user:create -- <логин> <пароль> "<ФИО>" [--admin]` | создать пользователя |
@@ -74,7 +74,7 @@ npx playwright test
 | frontend | `npm run build` | проверка типов и сборка PWA |
 | frontend | `npm run lint` | oxlint |
 | frontend | `APP_URL=https://… npx cap sync android` | обновить Android-проект |
-| e2e | `npx playwright test` | сквозные тесты (9) |
+| e2e | `npx playwright test` | сквозные тесты (10) |
 | e2e | `npx playwright show-report` | отчёт последнего прогона |
 
 ## Соглашения

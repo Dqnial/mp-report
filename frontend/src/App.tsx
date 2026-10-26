@@ -15,6 +15,7 @@ import { useMe } from './api/queries';
 import { requestPersistentStorage } from './offline/local';
 import { startSync } from './offline/sync';
 import { Layout } from './components/Layout';
+import { BasePage } from './pages/BasePage';
 import { DayPage } from './pages/DayPage';
 import { InvitePage } from './pages/InvitePage';
 import { LoginPage } from './pages/LoginPage';
@@ -101,6 +102,7 @@ export function App() {
         <Route path="/report" element={<ReportPage />} />
         <Route path="/report/preview" element={<PreviewPage />} />
         <Route path="/more" element={<MorePage />} />
+        <Route path="/more/base" element={<BasePage />} />
       </Route>
       {/* форма — на весь экран, без нижнего меню; «Назад» на Android её закрывает */}
       <Route path="/visit/new" element={<VisitPage />} />

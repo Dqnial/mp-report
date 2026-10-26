@@ -36,6 +36,7 @@ The app removes the retyping: a visit is logged in about half a minute, and the 
 - **Offline.** Visits are written to the phone's storage and sync when a connection appears; the screen always shows whether everything has been sent.
 - **Search** within a day, a month or all visits (name, clinic, address, phone by digits), with filters and sorting.
 - **Importing an already filled month** from Excel: past visits and the directory are pulled from the file.
+- **Doctor and pharmacy database** in the manager's own Excel file: every doctor and pharmacy from the visits goes onto its sheet, one row per person (spelling variants of the same doctor are merged), with the products shown to them.
 - **Invite-only sign-up** with one-time links.
 
 ## Engineering highlights
@@ -46,7 +47,7 @@ The app removes the retyping: a visit is logged in about half a minute, and the 
 - **Auth.** httpOnly + SameSite=Strict cookies, short-lived access JWT, rotating opaque refresh tokens stored as hashes, with **reuse detection**: a replayed refresh token revokes all of the user's sessions. The client performs a single refresh for all parallel requests, so the rotation never logs the user out by mistake.
 - **Android wrapper.** Chrome on Android refuses to share `.xlsx` via the Web Share API (`NotAllowedError`), so a thin Capacitor app uses the native share sheet and a custom plugin to receive the template from WhatsApp. The wrapper loads the production site, so frontend updates ship without reinstalling.
 - **Redis, queues and caching — with graceful degradation.** Template import runs as a BullMQ job (3 retries with exponential backoff, idempotent, status polling); nightly cleanup runs on a BullMQ job scheduler. Login is rate-limited (5 attempts/min per IP, then a 5-minute block) with counters in Redis. The finished report is cached with **versioned keys** (template upload time + visit count + last edit + build hash), so a stale report can never be served and nothing has to be invalidated by hand. The phone stores the downloaded file under the same version, so reopening the report screen doesn't re-download it. If Redis is down, everything keeps working: inline import, in-memory rate limiting, no cache — verified by stopping Redis mid-session. BullMQ over RabbitMQ on purpose: a single service, Redis already in place, ~10 MB instead of ~150 MB on a 1 GB server.
-- **Testing.** 87 unit tests (report placement, Excel row insertion, import parsing, Redis fallbacks, queue paths) and 9 Playwright end-to-end tests on the real stack (Postgres + Redis + API + built frontend): sign-in and rate limiting, a visit reaching the server, offline mode and sync, search, template → day plan → preview → xlsx.
+- **Testing.** 96 unit tests (report placement, Excel row insertion, doctor database, import parsing, Redis fallbacks, queue paths) and 10 Playwright end-to-end tests on the real stack (Postgres + Redis + API + built frontend): sign-in and rate limiting, a visit reaching the server, offline mode and sync, search, template → day plan → preview → xlsx, doctor database file.
 - **CI/CD.** Type checks, lint and unit tests, plus the E2E suite on GitHub Actions service containers → multi-arch (amd64 + arm64) Docker images in GHCR → SSH deploy with a health check; signed APK builds to GitHub Releases; nightly database backups with a restore check; OpenAPI docs via Swagger.
 
 ## Tech stack
@@ -57,7 +58,7 @@ The app removes the retyping: a visit is logged in about half a minute, and the 
 | Frontend | React 19, Vite 8, Mantine 9, TanStack Query 5, React Router 7, IndexedDB (`idb`), PWA (vite-plugin-pwa, custom Workbox service worker) |
 | Android | Capacitor 8 — native wrapper around the site (Share, Filesystem, custom file-receiving plugin) |
 | Infrastructure | Docker, Caddy (HTTPS, reverse proxy), GitHub Actions (CI/CD, images in GHCR, APK build and signing), nightly `pg_dump` backups |
-| Quality | Jest (87 unit tests), Playwright (9 end-to-end tests on the real stack), ESLint, oxlint, Prettier, strict TypeScript |
+| Quality | Jest (96 unit tests), Playwright (10 end-to-end tests on the real stack), ESLint, oxlint, Prettier, strict TypeScript |
 
 ## Architecture
 
@@ -126,6 +127,8 @@ backend/            NestJS API
   src/directory     directory of clinics, pharmacies, doctors
   src/templates     template upload and import of filled rows
   src/report        report building, row placement, preview, report cache
+  src/base          doctor and pharmacy database file
+  src/xlsx          in-place xlsx editing primitives
   src/redis         Redis connection with fallback
   src/maintenance   scheduled cleanup (BullMQ)
 frontend/           React app (PWA)

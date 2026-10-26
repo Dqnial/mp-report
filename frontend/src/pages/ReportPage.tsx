@@ -21,10 +21,13 @@ import {
   IconUpload,
 } from '@tabler/icons-react';
 import { useEffect, useRef, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { SyncBadge } from '../components/SyncBadge';
 import { UnfilledHint } from '../components/UnfilledHint';
-import { isNative, nativeShareFile } from '../native';
+import { ApiError } from '../api/client';
+import { download, shareFile, XLSX_MIME } from '../fileShare';
+import { baseUploadedMessage } from '../baseUploaded';
+import { isNative } from '../native';
 import { unsentChanges } from '../plural';
 import { takeSharedFile } from '../offline/shared';
 import { pushOutbox } from '../offline/sync';
@@ -33,6 +36,7 @@ import {
   useReportCheck,
   useReportFile,
   useTemplates,
+  useUploadBase,
   useUploadTemplate,
 } from '../api/queries';
 import {
@@ -43,46 +47,11 @@ import {
   todayIso,
 } from '../dates';
 
-const XLSX_MIME =
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-
-/** Скачать в «Загрузки» — только по явному нажатию (иначе мусор и «(1)» в имени). */
-function download(file: File) {
-  const url = URL.createObjectURL(file);
-  const a = Object.assign(document.createElement('a'), {
-    href: url,
-    download: file.name,
-  });
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
-  notifications.show({
-    color: 'teal',
-    message: 'Файл скачан — его можно отправить из «Загрузок»',
-  });
-}
-
-/**
- * «Поделиться» → WhatsApp. Файл живёт только в памяти страницы — на устройство
- * ничего не сохраняется, имя уходит ровно исходное. share вызываем сразу в
- * обработчике нажатия (файл подготовлен заранее): иначе браузер отказывает
- * «Permission denied». Отказал всё равно — сообщаем, но сами не скачиваем.
- */
-function shareReport(file: File, onFail: () => void) {
-  // Android-приложение (APK): системное «Поделиться» умеет .xlsx, Chrome — нет
-  if (isNative) {
-    nativeShareFile(file, 'Отправить отчёт').catch(onFail);
-    return;
-  }
-  if (!navigator.canShare?.({ files: [file] })) return onFail();
-  navigator.share({ files: [file] }).catch((e: Error) => {
-    if (e.name === 'AbortError') return; // закрыл меню «Поделиться»
-    onFail();
-  });
-}
-
 export function ReportPage() {
   const templates = useTemplates();
   const upload = useUploadTemplate();
+  const uploadBase = useUploadBase();
+  const navigate = useNavigate();
   const sync = useSyncStatus();
   const current = monthOf(todayIso());
   const [picked, setPicked] = useState<string | null>(null);
@@ -140,6 +109,23 @@ export function ReportPage() {
             : created + linked
               ? `Из файла прочитано визитов: ${created + linked} — они уже на экране «Визиты»`
               : `Рабочих дней: ${t.days}`,
+        });
+      },
+      onError: (e) => {
+        // не шаблон отчёта — может, это «База врачей и аптек» (её тоже
+        // присылают через «Поделиться», а такой файл открывается здесь)
+        if (!(e instanceof ApiError && e.status === 400)) return;
+        if (!e.message.startsWith('Не нашёл лист с визитами')) return;
+        uploadBase.mutate(file, {
+          onSuccess: (b) => {
+            upload.reset();
+            notifications.show({
+              color: 'teal',
+              title: 'Это файл базы врачей и аптек — загружен',
+              message: baseUploadedMessage(b),
+            });
+            navigate('/more/base');
+          },
         });
       },
     });
@@ -205,7 +191,7 @@ export function ReportPage() {
                   {...props}
                   size="lg"
                   leftSection={<IconUpload />}
-                  loading={upload.isPending}
+                  loading={upload.isPending || uploadBase.isPending}
                 >
                   Загрузить шаблон
                 </Button>
@@ -277,7 +263,9 @@ export function ReportPage() {
             onClick={() => {
               setShareFailed(false);
               if (fileReady && reportFile.data) {
-                shareReport(reportFile.data.file, () => setShareFailed(true));
+                shareFile(reportFile.data.file, 'Отправить отчёт', () =>
+                  setShareFailed(true),
+                );
               }
             }}
           >
@@ -326,7 +314,7 @@ export function ReportPage() {
                   variant="subtle"
                   size="sm"
                   leftSection={<IconUpload size={18} />}
-                  loading={upload.isPending}
+                  loading={upload.isPending || uploadBase.isPending}
                 >
                   Заменить шаблон
                 </Button>
@@ -358,7 +346,9 @@ export function ReportPage() {
           </Text>
         </Group>
       )}
-      {upload.error && <Alert color="red">{upload.error.message}</Alert>}
+      {upload.error && !uploadBase.isPending && (
+        <Alert color="red">{upload.error.message}</Alert>
+      )}
     </Stack>
   );
 }

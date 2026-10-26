@@ -11,6 +11,8 @@ import {
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import {
+  IconAddressBook,
+  IconChevronRight,
   IconSend,
   IconCircleCheck,
   IconCopy,
@@ -25,6 +27,7 @@ import {
   useSyncStatus,
   useRevokeInvite,
 } from '../api/queries';
+import { Link } from 'react-router-dom';
 import { isNative, nativeShareText } from '../native';
 import { unsentChanges } from '../plural';
 import classes from './MorePage.module.css';
@@ -86,6 +89,18 @@ export function MorePage() {
           Логин: {me.login}
         </Text>
       </Paper>
+
+      <Button
+        component={Link}
+        to="/more/base"
+        variant="light"
+        size="lg"
+        justify="space-between"
+        leftSection={<IconAddressBook />}
+        rightSection={<IconChevronRight size={20} />}
+      >
+        База врачей и аптек
+      </Button>
 
       {me.isAdmin && <InvitesBlock />}
 

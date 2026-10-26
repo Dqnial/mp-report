@@ -4,6 +4,7 @@ import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AuthModule } from './auth/auth.module';
+import { BaseModule } from './base/base.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { ResilientThrottlerStorage } from './auth/throttler-storage';
 import { DirectoryModule } from './directory/directory.module';
@@ -47,6 +48,7 @@ import { VisitsModule } from './visits/visits.module';
     VisitsModule,
     TemplatesModule,
     ReportModule,
+    BaseModule,
     MaintenanceModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: JwtAuthGuard }],

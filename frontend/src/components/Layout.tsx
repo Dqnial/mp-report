@@ -33,7 +33,7 @@ const TABS = [
     to: '/more',
     label: 'Ещё',
     icon: IconDots,
-    isActive: (p: string) => p === '/more',
+    isActive: (p: string) => p.startsWith('/more'),
   },
 ];
 
