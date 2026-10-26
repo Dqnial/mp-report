@@ -73,7 +73,8 @@ export class MaintenanceProcessor
   async process() {
     const removed = await this.maintenance.cleanup();
     this.logger.log(
-      `уборка: истёкших сессий ${removed.sessions}, старых приглашений ${removed.invites}`,
+      `уборка: истёкших сессий ${removed.sessions}, старых приглашений ${removed.invites}, ` +
+        `из справочника без визитов — врачей ${removed.contacts}, мест ${removed.places}`,
     );
     return removed;
   }

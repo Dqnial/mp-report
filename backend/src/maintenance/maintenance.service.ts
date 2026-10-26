@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { DirectoryService } from '../directory/directory.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 /** Неиспользованные приглашения храним после истечения ещё столько — для истории. */
@@ -7,10 +8,14 @@ const EXPIRED_INVITE_KEEP_DAYS = 30;
 /**
  * Уборка базы. Истёкшие refresh-сессии сами по себе не удаляются (только когда
  * их предъявят), и таблица растёт с каждым входом с нового устройства.
+ * Справочник чистится от врачей и мест без живых визитов.
  */
 @Injectable()
 export class MaintenanceService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly directory: DirectoryService,
+  ) {}
 
   async cleanup(now = new Date()) {
     const inviteCutoff = new Date(
@@ -22,6 +27,12 @@ export class MaintenanceService {
         where: { usedAt: null, expiresAt: { lt: inviteCutoff } },
       }),
     ]);
-    return { sessions: sessions.count, invites: invites.count };
+    const directory = await this.directory.pruneUnused();
+    return {
+      sessions: sessions.count,
+      invites: invites.count,
+      contacts: directory.contacts,
+      places: directory.places,
+    };
   }
 }

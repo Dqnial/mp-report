@@ -3,6 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { placeMatch } from '../common/place-match';
 import { PrismaService } from '../prisma/prisma.service';
 import { analyzeTemplate } from '../report/xlsx-template';
 import { TemplateFormatError } from '../xlsx/xlsx-xml';
@@ -73,31 +74,56 @@ export class BaseService {
     return { ...result, merged: rows.merged, fileName: t.originalName };
   }
 
+  /**
+   * Справочник помнит всех, кого когда-либо вводили: опечатки, удалённые
+   * визиты, старое ФИО после исправления. В базу — только те, у кого есть
+   * живой (не удалённый) визит, из приложения или из файла.
+   */
   private async rows(userId: string) {
-    const [contacts, emptyPharmacies] = await Promise.all([
+    const live = { deletedAt: null };
+    const [contacts, pharmacies, pharmacyVisits] = await Promise.all([
       this.prisma.contact.findMany({
-        where: { userId },
+        where: { userId, visits: { some: live } },
         select: {
           fullName: true,
           specialty: true,
           phone: true,
-          place: { select: { kind: true, name: true, address: true } },
+          place: {
+            select: { id: true, kind: true, name: true, address: true },
+          },
           visits: {
-            where: { deletedAt: null },
+            where: live,
             select: { kind: true, products: true, date: true },
             orderBy: { date: 'desc' },
           },
         },
       }),
+      // аптеки, где провизор не записан, — строкой без ФИО
       this.prisma.place.findMany({
-        where: {
-          userId,
-          kind: 'PHARMACY',
-          contacts: { none: { NOT: { fullName: '' } } },
-        },
-        select: { name: true, address: true },
+        where: { userId, kind: 'PHARMACY' },
+        select: { id: true, name: true, address: true },
+      }),
+      this.prisma.visit.findMany({
+        where: { userId, kind: 'PHARMACY', ...live, placeName: { not: null } },
+        select: { placeName: true, address: true },
+        distinct: ['placeName', 'address'],
       }),
     ]);
+    // у места нет связи с визитами — «есть живой визит» сверяем по названию
+    // и адресу, как и при заведении места
+    const visited = (p: { name: string; address: string | null }) =>
+      pharmacyVisits.some(
+        (v) => placeMatch({ name: v.placeName, address: v.address }, p) > 0,
+      );
+    const withPharmacist = new Set(
+      contacts.flatMap((c) =>
+        c.fullName.trim() && c.place ? [c.place.id] : [],
+      ),
+    );
+    const emptyPharmacies = pharmacies.filter(
+      (p) => !withPharmacist.has(p.id) && visited(p),
+    );
+
     // свежие (по последнему визиту) — первыми: при слиянии повторов они главнее
     const last = (c: (typeof contacts)[number]) =>
       c.visits[0]?.date.getTime() ?? 0;

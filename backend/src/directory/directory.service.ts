@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PlaceKind, Prisma, VisitKind } from '@prisma/client';
 import { fromIsoDate } from '../common/dates';
-import { addressMatch } from '../common/place-match';
+import { addressMatch, placeMatch } from '../common/place-match';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   CreateContactDto,
@@ -235,6 +235,52 @@ export class DirectoryService {
           data: { ...data, userId, fullName: v.fullName },
         });
     return saved.id;
+  }
+
+  // ─── уборка ───────────────────────────────────────────────────────────────
+
+  /**
+   * Убрать из справочника тех, кого нет ни в одном живом визите: опечатки,
+   * врачей из удалённых визитов, старое ФИО после исправления визита. Иначе
+   * они вечно всплывают в подсказках. Ничего не теряется: визиты ссылаются
+   * на справочник необязательно (при удалении — null), а восстановленный или
+   * новый визит заведёт врача заново.
+   *
+   * Место — без врачей и без живого визита с тем же названием и адресом
+   * (у места нет прямой связи с визитами — сверяем, как при заведении).
+   */
+  async pruneUnused() {
+    const contacts = await this.prisma.contact.deleteMany({
+      where: { visits: { none: { deletedAt: null } } },
+    });
+
+    const empty = await this.prisma.place.findMany({
+      where: { contacts: { none: {} } },
+      select: { id: true, userId: true, kind: true, name: true, address: true },
+    });
+    if (!empty.length) return { contacts: contacts.count, places: 0 };
+    const visits = await this.prisma.visit.findMany({
+      where: {
+        userId: { in: [...new Set(empty.map((p) => p.userId))] },
+        deletedAt: null,
+        placeName: { not: null },
+      },
+      select: { userId: true, kind: true, placeName: true, address: true },
+      distinct: ['userId', 'kind', 'placeName', 'address'],
+    });
+    const unused = empty.filter(
+      (p) =>
+        !visits.some(
+          (v) =>
+            v.userId === p.userId &&
+            placeKindFor(v.kind) === p.kind &&
+            placeMatch({ name: v.placeName, address: v.address }, p) > 0,
+        ),
+    );
+    const places = await this.prisma.place.deleteMany({
+      where: { id: { in: unused.map((p) => p.id) } },
+    });
+    return { contacts: contacts.count, places: places.count };
   }
 
   private async ownPlace(userId: string, id: string) {
