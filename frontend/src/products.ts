@@ -56,13 +56,13 @@ export const SPECIALTIES = {
   PHARMACY: ['провизор', 'фармацевт', 'зав. аптекой'],
 } as const;
 
-/**
- * Потенциал врача — как в базе руководителя (колонка «Потенциал»). fill —
- * заливка строки визита в отчёте (стандартные «хорошо / нейтрально / плохо»
- * Excel, как в backend POTENTIAL_FILL).
- */
+/** Потенциал врача — как в базе руководителя (колонка «Потенциал»). */
 export const POTENTIALS = [
-  { value: 'LOW', label: 'Низкий', fill: '#FFC7CE' },
-  { value: 'MEDIUM', label: 'Средний', fill: '#FFEB9C' },
-  { value: 'HIGH', label: 'Высокий', fill: '#C6EFCE' },
+  { value: 'LOW', label: 'Низкий', color: 'red' },
+  { value: 'MEDIUM', label: 'Средний', color: 'yellow' },
+  { value: 'HIGH', label: 'Высокий', color: 'green' },
 ] as const;
+
+/** Цвет и подпись потенциала — для меток и кнопок. */
+export const potentialInfo = (p: string | null | undefined) =>
+  POTENTIALS.find((x) => x.value === p);

@@ -22,7 +22,6 @@ import { usePreview, useSyncStatus, useTemplates } from '../api/queries';
 import type { PreviewRow } from '../api/types';
 import { SyncBadge } from '../components/SyncBadge';
 import { formatDay, monthOf, shiftWorkday, todayIso } from '../dates';
-import { POTENTIALS } from '../products';
 import { unsentChanges } from '../plural';
 import classes from './PreviewPage.module.css';
 
@@ -175,8 +174,6 @@ function FreeRows({ rows }: { rows: PreviewRow[] }) {
 
 function RowCard({ r }: { r: PreviewRow }) {
   const c = r.cells;
-  // в файле строка залита цветом потенциала врача — здесь так же
-  const potential = POTENTIALS.find((p) => p.value === r.potential);
   const details = [c.H, c.I].filter(Boolean).join(' · ');
   const products = [c.J, c.K, c.L, c.M].filter(Boolean).join(', ');
   const body = (
@@ -186,7 +183,6 @@ function RowCard({ r }: { r: PreviewRow }) {
       p="xs"
       className={classes.row}
       data-source={r.source}
-      style={potential && { backgroundColor: potential.fill }}
     >
       <Stack gap={2}>
         <Group gap={6} justify="space-between" wrap="nowrap">
@@ -204,11 +200,6 @@ function RowCard({ r }: { r: PreviewRow }) {
             </Text>
           </Group>
           <Group gap={4} wrap="nowrap">
-            {potential && (
-              <Badge color="dark" variant="outline" tt="none">
-                {potential.label}
-              </Badge>
-            )}
             {r.added && (
               <Badge color="orange" variant="light" tt="none">
                 добавлена

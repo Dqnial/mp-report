@@ -71,6 +71,27 @@ test('справочник: исправить ФИО и потенциал — 
     .find((r) => r.includes(fixed));
   expect(row).toContain('Высокий');
 
+  // фильтр по потенциалу и смена потенциала одним нажатием прямо в списке
+  await page.getByPlaceholder('ФИО, ЛПУ, адрес или телефон').fill(fixed);
+  await page.getByText(/^Высокий · \d+$/).click();
+  const card = page.locator('.mantine-Paper-root', { hasText: fixed });
+  await expect(card).toHaveCount(1);
+  await card.getByRole('button', { name: 'Средний' }).click();
+  await expect(card).toHaveCount(0); // ушёл из «Высоких»
+  await page.getByText(/^Средний · \d+$/).click();
+  await expect(card.getByRole('button', { name: 'Средний' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await expect
+    .poll(async () =>
+      (await baseDoctors(page.request))
+        .match(/<row\b[\s\S]*?<\/row>/g)!
+        .find((r) => r.includes(fixed)),
+    )
+    .toContain('Средний');
+  await page.getByText(/^Все · \d+$/).click();
+
   // «не включать в базу» — строки больше нет
   await page.getByPlaceholder('ФИО, ЛПУ, адрес или телефон').fill(fixed);
   await page.getByText(fixed).click();
@@ -81,7 +102,7 @@ test('справочник: исправить ФИО и потенциал — 
     .getByRole('dialog')
     .getByRole('button', { name: 'Сохранить' })
     .click();
-  await expect(page.getByText('не в базе')).toBeVisible();
+  await expect(page.getByText('не в базе', { exact: true })).toBeVisible();
   expect(await baseDoctors(page.request)).not.toContain(fixed);
 });
 
@@ -102,7 +123,6 @@ test('визит из файла: исправление переписывае�
   await expect(page.getByText(/Визит из файла отчёта/)).toBeVisible();
   await page.getByRole('combobox', { name: 'ФИО врача' }).fill(fixed);
   await page.keyboard.press('Escape');
-  await page.getByRole('button', { name: 'Высокий' }).click();
   await page.getByRole('button', { name: 'Сохранить' }).click();
   await expect(page.getByText(fixed)).toBeVisible();
   await expect(page.getByText('Всё на сервере')).toBeVisible();
@@ -118,23 +138,6 @@ test('визит из файла: исправление переписывае�
   let sheet = await reportSheet();
   expect(sheet).toContain(fixed);
   expect(sheet).not.toContain(inFile);
-
-  // высокий потенциал — строка визита зелёная
-  const report = await JSZip.loadAsync(
-    await (await page.request.get(`/api/reports/${month}`)).body(),
-  );
-  const styles = await report.file('xl/styles.xml')!.async('string');
-  const row = sheet
-    .match(/<row\b[\s\S]*?<\/row>/g)!
-    .find((r) => r.includes(fixed))!;
-  const style = Number(row.match(/<c r="G\d+"[^>]*?\ss="(\d+)"/)![1]);
-  const xf = styles
-    .match(/<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/)![1]
-    .match(/<xf\b[^>]*?(?:\/>|>[\s\S]*?<\/xf>)/g)![style];
-  const fill = styles.match(/<fill>[\s\S]*?<\/fill>/g)![
-    Number(xf.match(/fillId="(\d+)"/)![1])
-  ];
-  expect(fill).toContain('FFC6EFCE');
 
   // тот же файл ещё раз — правка не затирается, визит не задваивается
   await uploadTemplate(page.request, template);

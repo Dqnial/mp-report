@@ -36,11 +36,7 @@ describe('ResilientThrottlerStorage', () => {
 });
 
 describe('ReportCacheService', () => {
-  const prisma = (
-    count: number,
-    maxUpdated: number | null,
-    contactUpdated = 1_000,
-  ) =>
+  const prisma = (count: number, maxUpdated: number | null) =>
     ({
       template: {
         findUnique: () =>
@@ -55,29 +51,19 @@ describe('ReportCacheService', () => {
             },
           }),
       },
-      contact: {
-        aggregate: () =>
-          Promise.resolve({ _max: { updatedAt: new Date(contactUpdated) } }),
-      },
     }) as unknown as PrismaService;
 
-  it('ключ меняется при любой правке: новый визит, правка, удаление, справочник', async () => {
-    const key = async (
-      count: number,
-      updated: number | null,
-      contact?: number,
-    ) =>
+  it('ключ меняется при любой правке: новый визит, правка, удаление', async () => {
+    const key = async (count: number, updated: number | null) =>
       (await new ReportCacheService(
-        prisma(count, updated, contact),
+        prisma(count, updated),
         fakeRedis(true),
       ).key('u1', '2026-10'))!;
     const base = await key(10, 5_000);
     expect(await key(10, 5_000)).toEqual(base); // ничего не менялось — тот же
     const added = await key(11, 6_000); // новый визит
     const edited = await key(10, 7_000); // правка или мягкое удаление
-    // потенциал врача в справочнике — цвет строк отчёта
-    const directory = await key(10, 5_000, 9_000);
-    for (const k of [added, edited, directory]) {
+    for (const k of [added, edited]) {
       expect(k.key).not.toBe(base.key);
       expect(k.version).not.toBe(base.version);
     }
