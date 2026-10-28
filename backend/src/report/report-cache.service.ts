@@ -50,16 +50,24 @@ export class ReportCacheService {
     });
     if (!template) return null;
     const { from, to } = monthRange(month);
-    const visits = await this.prisma.visit.aggregate({
-      where: { userId, date: { gte: from, lt: to } },
-      _count: { _all: true },
-      _max: { updatedAt: true },
-    });
+    const [visits, contacts] = await Promise.all([
+      this.prisma.visit.aggregate({
+        where: { userId, date: { gte: from, lt: to } },
+        _count: { _all: true },
+        _max: { updatedAt: true },
+      }),
+      // потенциал врача красит строки отчёта — правка справочника тоже новая версия
+      this.prisma.contact.aggregate({
+        where: { userId },
+        _max: { updatedAt: true },
+      }),
+    ]);
     const version = [
       template.id,
       template.createdAt.getTime(),
       visits._count._all,
       visits._max.updatedAt?.getTime() ?? 0,
+      contacts._max.updatedAt?.getTime() ?? 0,
       process.env.APP_BUILD ?? 'dev',
     ].join(':');
     return {

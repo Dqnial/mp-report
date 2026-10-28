@@ -102,6 +102,7 @@ test('визит из файла: исправление переписывае�
   await expect(page.getByText(/Визит из файла отчёта/)).toBeVisible();
   await page.getByRole('combobox', { name: 'ФИО врача' }).fill(fixed);
   await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Высокий' }).click();
   await page.getByRole('button', { name: 'Сохранить' }).click();
   await expect(page.getByText(fixed)).toBeVisible();
   await expect(page.getByText('Всё на сервере')).toBeVisible();
@@ -117,6 +118,23 @@ test('визит из файла: исправление переписывае�
   let sheet = await reportSheet();
   expect(sheet).toContain(fixed);
   expect(sheet).not.toContain(inFile);
+
+  // высокий потенциал — строка визита зелёная
+  const report = await JSZip.loadAsync(
+    await (await page.request.get(`/api/reports/${month}`)).body(),
+  );
+  const styles = await report.file('xl/styles.xml')!.async('string');
+  const row = sheet
+    .match(/<row\b[\s\S]*?<\/row>/g)!
+    .find((r) => r.includes(fixed))!;
+  const style = Number(row.match(/<c r="G\d+"[^>]*?\ss="(\d+)"/)![1]);
+  const xf = styles
+    .match(/<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/)![1]
+    .match(/<xf\b[^>]*?(?:\/>|>[\s\S]*?<\/xf>)/g)![style];
+  const fill = styles.match(/<fill>[\s\S]*?<\/fill>/g)![
+    Number(xf.match(/fillId="(\d+)"/)![1])
+  ];
+  expect(fill).toContain('FFC6EFCE');
 
   // тот же файл ещё раз — правка не затирается, визит не задваивается
   await uploadTemplate(page.request, template);

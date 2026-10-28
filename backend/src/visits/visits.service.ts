@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, Visit } from '@prisma/client';
+import { Potential, Prisma, Visit } from '@prisma/client';
 import { fromIsoDate, monthRange, toIsoDate } from '../common/dates';
 import { DirectoryService } from '../directory/directory.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -319,6 +319,37 @@ export class VisitsService {
         fileEditedAt: { not: null },
       },
     });
+  }
+
+  /**
+   * Потенциал врачей визитов месяца — для цвета строк отчёта. Берём из
+   * справочника (там самое свежее), нет — с самого визита.
+   */
+  async monthPotentials(userId: string, month: string) {
+    const { from, to } = monthRange(month);
+    const visits = await this.prisma.visit.findMany({
+      where: {
+        userId,
+        date: { gte: from, lt: to },
+        deletedAt: null,
+        kind: 'DOCTOR',
+      },
+      select: {
+        clientId: true,
+        templateRow: true,
+        potential: true,
+        contact: { select: { potential: true } },
+      },
+    });
+    const byVisit = new Map<string, Potential>();
+    const byTemplateRow = new Map<number, Potential>();
+    for (const v of visits) {
+      const p = v.contact?.potential ?? v.potential;
+      if (!p) continue;
+      byVisit.set(v.clientId, p);
+      if (v.templateRow != null) byTemplateRow.set(v.templateRow, p);
+    }
+    return { byVisit, byTemplateRow };
   }
 
   /** Визиты месяца для отчёта — кроме тех, что уже записаны в файле. */

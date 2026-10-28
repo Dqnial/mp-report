@@ -65,7 +65,7 @@ npx playwright test
 | Где | Команда | Что делает |
 |---|---|---|
 | backend | `npm run start:dev` | API с перезапуском при изменениях |
-| backend | `npm test` | юнит-тесты Jest (108) |
+| backend | `npm test` | юнит-тесты Jest (111) |
 | backend | `npm run lint` | ESLint |
 | backend | `npm run db:migrate` | новая миграция Prisma |
 | backend | `npm run user:create -- <логин> <пароль> "<ФИО>" [--admin]` | создать пользователя |

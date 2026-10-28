@@ -7,6 +7,7 @@
 import JSZip from 'jszip';
 import { shortRu as fmt } from '../common/dates';
 import { placeMatch } from '../common/place-match';
+import { FillStyles, restyleCells } from '../xlsx/xlsx-fills';
 import {
   attr,
   blankRow,
@@ -840,16 +841,64 @@ async function planFill(
   return { sheet, days, insertions, finalEdits, rowVisit, warnings, placed };
 }
 
+// ─── цвет строки по потенциалу врача ─────────────────────────────────────────
+
+export type Potential = 'LOW' | 'MEDIUM' | 'HIGH';
+
+/** Потенциал врачей месяца: визиты приложения — по id, строки файла — по номеру. */
+export interface RowPotentials {
+  byVisit: Map<string, Potential>;
+  byTemplateRow: Map<number, Potential>;
+}
+
+/** Заливка строки визита — стандартная тройка Excel: хорошо / нейтрально / плохо. */
+export const POTENTIAL_FILL: Record<Potential, string> = {
+  HIGH: 'FFC6EFCE',
+  MEDIUM: 'FFFFEB9C',
+  LOW: 'FFFFC7CE',
+};
+
+/** Колонки строки визита, которые заливаем (A — день недели, объединена на день). */
+const FILL_COLS = [...'BCDEFGHIJKLMN'];
+
+/** Итоговый номер строки → потенциал врача в ней. */
+function potentialRows(
+  potentials: RowPotentials | undefined,
+  insertions: Insertion[],
+  rowVisit: Map<number, string>,
+) {
+  const rows = new Map<number, Potential>();
+  if (!potentials) return rows;
+  for (const [row, p] of potentials.byTemplateRow) {
+    rows.set(shiftRow(row, insertions), p);
+  }
+  for (const [row, id] of rowVisit) {
+    const p = potentials.byVisit.get(id);
+    if (p) rows.set(row, p);
+  }
+  return rows;
+}
+
 export async function fillTemplate(
   file: Buffer,
   visits: VisitCells[],
   fileEdits: FileRowEdit[] = [],
+  potentials?: RowPotentials,
 ): Promise<FillResult> {
-  const { sheet, insertions, finalEdits, warnings, placed } = await planFill(
-    file,
-    visits,
-    fileEdits,
-  );
+  const { sheet, insertions, finalEdits, rowVisit, warnings, placed } =
+    await planFill(file, visits, fileEdits);
+  const highlight = potentialRows(potentials, insertions, rowVisit);
+  const styles = highlight.size
+    ? FillStyles.parse(await readPart(sheet.zip, 'xl/styles.xml'))
+    : null;
+  const paint = (rowXml: string, row: number) => {
+    const p = styles && highlight.get(row);
+    return p
+      ? restyleCells(rowXml, FILL_COLS, (s) =>
+          styles.styleWith(s, POTENTIAL_FILL[p]),
+        )
+      : rowXml;
+  };
 
   // каждая колонка правится один раз, так что исходная разметка остальных
   // ячеек строки остаётся на месте
@@ -868,17 +917,21 @@ export async function fillTemplate(
     const to = shiftRow(row.r, insertions);
     const insertHere = insertions.find((i) => i.at === row.r);
     const put = finalEdits.get(to);
-    if (!insertHere && to === row.r && !put?.size) continue;
+    const painted = !!styles && highlight.has(to);
+    if (!insertHere && to === row.r && !put?.size && !painted) continue;
 
     let out = '';
     if (insertHere) {
       for (let k = 0; k < insertHere.count; k++) {
         const n = to - insertHere.count + k;
-        out += applyEdits(blankRow(insertHere.source, n), finalEdits.get(n));
+        out += paint(
+          applyEdits(blankRow(insertHere.source, n), finalEdits.get(n)),
+          n,
+        );
       }
     }
     const filled = applyEdits(row, put);
-    out += to === row.r ? filled : renumberRow(filled, to);
+    out += paint(to === row.r ? filled : renumberRow(filled, to), to);
     xml += shiftSheetRefs(sheet.xml.slice(pos, row.start), insertions) + out;
     pos = row.start + row.xml.length;
   }
@@ -886,6 +939,9 @@ export async function fillTemplate(
 
   // без createFolders: иначе JSZip добавит в архив записи папок «xl/», «xl/worksheets/»
   sheet.zip.file(sheet.path, xml, { createFolders: false });
+  if (styles?.changed) {
+    sheet.zip.file('xl/styles.xml', styles.toXml(), { createFolders: false });
+  }
   if (insertions.length) {
     const wb = (await readPart(sheet.zip, 'xl/workbook.xml'))!;
     const shifted = shiftDefinedNames(wb, sheet.name, insertions);
@@ -928,6 +984,8 @@ export interface PreviewRow {
   added: boolean;
   /** визит из приложения в этой строке */
   visitId?: string;
+  /** потенциал врача — строка в файле залита его цветом */
+  potential?: Potential;
 }
 
 export interface DayPreview {
@@ -947,9 +1005,11 @@ export async function previewDay(
   visits: VisitCells[],
   date: string,
   fileEdits: FileRowEdit[] = [],
+  potentials?: RowPotentials,
 ): Promise<DayPreview> {
   const { sheet, days, insertions, finalEdits, rowVisit, warnings } =
     await planFill(file, visits, fileEdits);
+  const highlight = potentialRows(potentials, insertions, rowVisit);
   const dayWarnings = warnings.filter((w) => w.startsWith(`${fmt(date)}:`));
   const day = days.get(date);
   if (!day) {
@@ -984,6 +1044,7 @@ export async function previewDay(
       source: visitId ? 'app' : filledInFile ? 'file' : 'empty',
       added: !original.has(r),
       visitId,
+      potential: highlight.get(r),
     });
   }
   return { date, inTemplate: true, rows, warnings: dayWarnings };

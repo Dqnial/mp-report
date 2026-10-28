@@ -118,6 +118,8 @@ export interface PreviewRow {
   source: 'file' | 'app' | 'empty';
   added: boolean;
   visitId?: string;
+  /** потенциал врача — строка в файле залита его цветом */
+  potential?: Potential;
 }
 
 export interface DayPreview {
