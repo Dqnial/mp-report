@@ -587,10 +587,13 @@ async function canInsertRows(sheet: LoadedSheet) {
   const unsafe =
     /<f[\s>]|<formula[\s>]|<drawing\b|<legacyDrawing\b|<tableParts\b|<oleObjects\b|<controls\b/;
   if (unsafe.test(sheet.xml)) return false;
-  // на лист ссылаются другие части книги (формулы других листов, диаграммы…)
+  // на лист ссылаются другие части книги (формулы других листов, диаграммы…);
+  // docProps — свойства документа: там Excel перечисляет имена листов, это
+  // не ссылки (иначе строки не добавлялись бы ни в одном сохранённом им файле)
   const needle = escapeXml(sheet.name);
   for (const [path, f] of Object.entries(sheet.zip.files)) {
     if (f.dir || path === sheet.path || path === 'xl/workbook.xml') continue;
+    if (path.startsWith('docProps/')) continue;
     if (!/\.(xml|rels)$/.test(path)) continue;
     if ((await f.async('string')).includes(needle)) return false;
   }

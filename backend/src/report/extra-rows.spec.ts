@@ -223,6 +223,24 @@ describe('визитов больше, чем строк', () => {
       '01.10: не хватило строк для 1 визит(ов) — допишите вручную',
     ]);
   });
+
+  it('имя листа в свойствах документа (docProps) — не ссылка: строки добавляются', async () => {
+    // Excel пишет список листов в docProps/app.xml — так в любом сохранённом им файле
+    const zip = await JSZip.loadAsync(await template());
+    zip.file(
+      'docProps/app.xml',
+      `<Properties><TitlesOfParts><vt:vector size="1" baseType="lpstr"><vt:lpstr>${SHEET}</vt:lpstr></vt:vector></TitlesOfParts></Properties>`,
+    );
+    const file = await zip.generateAsync({ type: 'nodebuffer' });
+    const visits = [1, 2, 3, 4, 5].map((i) =>
+      visit('2026-10-01', 'ГП 1', `Врач ${i}`),
+    );
+    const res = await fillTemplate(file, visits);
+    expect(res.placed).toBe(5);
+    expect(res.warnings).toEqual([
+      '01.10: визитов больше, чем строк в шаблоне — добавил строк в конце дня: 1',
+    ]);
+  });
 });
 
 describe('expandDay', () => {
