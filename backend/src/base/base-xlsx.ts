@@ -5,9 +5,12 @@
 //
 // Листы и колонки ищем по заголовкам, а не по буквам: врачи — лист, где в
 // строке заголовка есть «ФИО» и «ЛПУ», аптеки — «ФИО» и «Аптека».
+import { summaryTable, type SummaryInput } from './base-summary';
 import {
   attr,
   blankRow,
+  colToNum,
+  dropCalcChain,
   listSheets,
   openXlsx,
   parseRows,
@@ -15,6 +18,7 @@ import {
   readSharedStrings,
   type Row,
   setCellInRow,
+  setFormulaInRow,
   TemplateFormatError,
 } from '../xlsx/xlsx-xml';
 
@@ -159,7 +163,164 @@ function extendRanges(xml: string, firstData: number, lastRow: number) {
  * справочная табличка сбоку) не трогаем. Старые значения под записями
  * (строка-пример) стираем, нумерацию № продолжаем.
  */
-function fillSheet(sheet: BaseSheet, records: BaseRecord[]) {
+/** Строк данных, на которые смотрят формулы сводки (с запасом на рост базы). */
+const SUMMARY_ROWS = 2000;
+
+const colName = (n: number) => {
+  let s = '';
+  for (let k = n; k > 0; k = Math.floor((k - 1) / 26)) {
+    s = String.fromCharCode(65 + ((k - 1) % 26)) + s;
+  }
+  return s;
+};
+
+/**
+ * Сводка на листе врачей — в первых свободных колонках правее всего, что
+ * есть у шапки (табличка руководителя остаётся). Четыре числа таблички
+ * руководителя («Траматолог», «ВОП», «Гастроэнтеролог», «Аптек») становятся
+ * ссылками на сводку — считают по тем же правилам.
+ */
+function writeSummary(
+  sheet: BaseSheet,
+  out: Map<number, string>,
+  rows: Row[],
+  records: BaseRecord[],
+  pharmacies: SummaryInput['pharmacies'],
+) {
+  const { fullName, specialty, potential } = sheet.cols;
+  if (!fullName || !specialty) return;
+  const first = sheet.header + 1;
+  const near = rows.filter(
+    (r) => r.r >= sheet.header && r.r <= sheet.header + 40,
+  );
+  // табличка руководителя («Специалистов в базе») — по ней оформление и ссылки
+  const manager = near
+    .flatMap((r) => [...r.cells.values()].map((c) => ({ r: r.r, c })))
+    .find(({ c }) => /специалист/i.test(c.value));
+  const mCol = manager && colName(colToNum(manager.c.col) + 1);
+
+  // прежние подсчёты потенциала рядом с легендой руководителя (формулы
+  // COUNTIF правее неё и подпись «Низкий») — теперь это делает сводка
+  const stale: { r: number; col: string }[] = [];
+  if (manager && mCol) {
+    const nCol = colName(colToNum(mCol) + 1);
+    for (const row of near) {
+      if (row.r <= manager.r || row.r > manager.r + 12) continue;
+      const n = row.cells.get(nCol);
+      if (!n || !/<f>[^<]*COUNTIF/i.test(n.xml)) continue;
+      stale.push({ r: row.r, col: nCol });
+      const label = row.cells.get(manager.c.col)?.value ?? '';
+      if (/^низкий$/i.test(label) && !row.cells.get(mCol)?.value) {
+        stale.push({ r: row.r, col: manager.c.col });
+      }
+    }
+  }
+  const isStale = (r: number, col: string) =>
+    stale.some((x) => x.r === r && x.col === col);
+
+  const used = Math.max(
+    ...near.flatMap((r) =>
+      [...r.cells.values()]
+        .filter((c) => c.value && !isStale(r.r, c.col))
+        .map((c) => colToNum(c.col)),
+    ),
+  );
+  const [labelCol, valueCol] = [colName(used + 2), colName(used + 3)];
+
+  const styleAt = (r: number, col: string) =>
+    attr(rows.find((x) => x.r === r)?.cells.get(col)?.attrs ?? '', 's');
+  const style = {
+    title: manager && styleAt(manager.r, manager.c.col),
+    label: manager && styleAt(manager.r + 1, manager.c.col),
+    number: manager && mCol && styleAt(manager.r + 1, mCol),
+  };
+
+  const { rows: table, byLabel } = summaryTable({
+    cols: { fullName, specialty, potential },
+    first,
+    last: first + SUMMARY_ROWS - 1,
+    doctors: records,
+    pharmacies,
+  });
+  const put = (
+    r: number,
+    col: string,
+    cell: (typeof table)[number][number],
+  ) => {
+    const rowXml = out.get(r) ?? `<row r="${r}"/>`;
+    const existing = parseRows(rowXml, [])[0]?.cells.get(col);
+    const ref = `${col}${r}`;
+    const st =
+      style[
+        cell.kind === 'title'
+          ? 'title'
+          : cell.kind === 'number'
+            ? 'number'
+            : 'label'
+      ];
+    out.set(
+      r,
+      cell.formula
+        ? setFormulaInRow(
+            rowXml,
+            ref,
+            cell.formula,
+            cell.value ?? 0,
+            existing,
+            st,
+          )
+        : setCellInRow(rowXml, ref, cell.text ?? '', existing, st),
+    );
+  };
+  table.forEach(([a, b], i) => {
+    put(first + i, labelCol, a);
+    put(first + i, valueCol, b);
+  });
+  for (const { r, col } of stale) {
+    const rowXml = out.get(r)!;
+    const existing = parseRows(rowXml, [])[0].cells.get(col);
+    out.set(r, setCellInRow(rowXml, `${col}${r}`, '', existing));
+  }
+
+  // табличка руководителя: числа → ссылки на сводку
+  if (!manager || !mCol) return;
+  const LINKS: [RegExp, string][] = [
+    // у руководителя — «Траматолог»: и так, и через «в»
+    [/трав?мат/i, 'Травматолог'],
+    [/^воп/i, 'ВОП'],
+    [/гастро/i, 'Гастроэнтеролог'],
+    [/аптек/i, 'Аптек'],
+  ];
+  for (let r = manager.r + 1; r <= manager.r + 8; r++) {
+    const row = rows.find((x) => x.r === r);
+    const label = row?.cells.get(manager.c.col)?.value ?? '';
+    const current = row?.cells.get(mCol)?.value ?? '';
+    const link = LINKS.find(([re]) => re.test(label.trim()))?.[1];
+    // число (у формулы — её значение, бывает и 90.99999999999999); текст не трогаем
+    if (!link || (current !== '' && Number.isNaN(Number(current)))) continue;
+    const at = byLabel.get(link);
+    const rowXml = out.get(r)!;
+    const existing = parseRows(rowXml, [])[0].cells.get(mCol);
+    out.set(
+      r,
+      at === undefined
+        ? setFormulaInRow(rowXml, `${mCol}${r}`, '0', 0, existing)
+        : setFormulaInRow(
+            rowXml,
+            `${mCol}${r}`,
+            `${valueCol}${first + at}`,
+            table[at][1].value ?? 0,
+            existing,
+          ),
+    );
+  }
+}
+
+function fillSheet(
+  sheet: BaseSheet,
+  records: BaseRecord[],
+  pharmacies?: SummaryInput['pharmacies'],
+) {
   const first = sheet.header + 1;
   const fields = Object.entries(sheet.cols) as [BaseField, string][];
   const dataFields = fields.filter(([f]) => f !== 'num');
@@ -199,6 +360,9 @@ function fillSheet(sheet: BaseSheet, records: BaseRecord[]) {
     for (const [field] of dataFields) blank[field] = '';
     out.set(row.r, write(row, blank));
   }
+
+  if (sheet.kind === 'doctors')
+    writeSummary(sheet, out, rows, records, pharmacies);
 
   const rowsXml = [...out.entries()]
     .sort(([a], [b]) => a - b)
@@ -267,6 +431,26 @@ export async function fillBase(
   const warnings: string[] = [];
   const counts = { doctors: 0, pharmacies: 0 };
 
+  // для «Аптек» в сводке листа врачей: где лист аптек и сколько разных аптек
+  const ph = sheets.find((s) => s.kind === 'pharmacies');
+  const pharmacies = ph?.cols.place
+    ? {
+        sheet: ph.name,
+        place: ph.cols.place,
+        address: ph.cols.address,
+        first: ph.header + 1,
+        last: ph.header + SUMMARY_ROWS,
+        count: new Set(
+          data.pharmacies
+            .filter((p) => p.place?.trim())
+            .map(
+              (p) =>
+                `${p.place!.trim().toLowerCase()}|${(p.address ?? '').trim().toLowerCase()}`,
+            ),
+        ).size,
+      }
+    : undefined;
+
   for (const sheet of sheets) {
     const records = data[sheet.kind].map((r) => ({
       ...r,
@@ -274,7 +458,9 @@ export async function fillBase(
       city: sheet.city,
       potential: r.potential ?? '',
     }));
-    zip.file(sheet.path, fillSheet(sheet, records), { createFolders: false });
+    zip.file(sheet.path, fillSheet(sheet, records, pharmacies), {
+      createFolders: false,
+    });
     counts[sheet.kind] = records.length;
   }
   if (!sheets.some((s) => s.kind === 'doctors') && data.doctors.length) {
@@ -283,6 +469,8 @@ export async function fillBase(
   if (!sheets.some((s) => s.kind === 'pharmacies') && data.pharmacies.length) {
     warnings.push('В файле нет листа аптек — аптеки в базу не попали');
   }
+  // формулы сводки меняются — старая цепочка вычислений сломала бы книгу
+  await dropCalcChain(zip);
 
   const out = await zip.generateAsync({
     type: 'nodebuffer',

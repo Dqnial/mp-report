@@ -113,8 +113,11 @@ async function base() {
   return zip.generateAsync({ type: 'nodebuffer' });
 }
 
-/** Лист как {строка: {колонка: значение}} и стили ячеек. */
-async function readSheet(file: Buffer, n: number) {
+/**
+ * Лист как {строка: {колонка: значение}} и стили ячеек. Значения — до
+ * колонки upTo: правее идёт сводка по специальностям (её проверяет свой тест).
+ */
+async function readSheet(file: Buffer, n: number, upTo = 'M') {
   const zip = await JSZip.loadAsync(file);
   const xml = await zip.file(`xl/worksheets/sheet${n}.xml`)!.async('string');
   const values: Record<number, Record<string, string>> = {};
@@ -124,7 +127,8 @@ async function readSheet(file: Buffer, n: number) {
   )) {
     styles[`${col}${r}`] = attrs.match(/s="(\d+)"/)?.[1] ?? '';
     const v = inner?.match(/<t[^>]*>([\s\S]*?)<\/t>/)?.[1];
-    if (v) (values[Number(r)] ??= {})[col] = v;
+    if (v && col.length === 1 && col <= upTo)
+      (values[Number(r)] ??= {})[col] = v;
   }
   return { xml, values, styles };
 }
@@ -191,7 +195,9 @@ describe('база врачей и аптек', () => {
     expect(xml).toContain('<dimension ref="A2:L7"/>');
     // строки идут по порядку
     const order = [...xml.matchAll(/<row r="(\d+)"/g)].map((m) => +m[1]);
-    expect(order).toEqual([2, 3, 4, 5, 6, 7]);
+    // (ниже данных — строки сводки по специальностям, если она длиннее)
+    expect(order.slice(0, 6)).toEqual([2, 3, 4, 5, 6, 7]);
+    expect(order).toEqual([...order].sort((x, y) => x - y));
   });
 
   it('врачей меньше строк: пример ниже стирается, подготовленная нумерация остаётся', async () => {
@@ -245,5 +251,104 @@ describe('база врачей и аптек', () => {
         await before.file(part)!.async('string'),
       );
     }
+  });
+
+  it('сводка по специальностям: все специальности формулами, табличка руководителя ссылается на неё', async () => {
+    // табличка руководителя: «Специалистов в базе», Траматолог 10, ВОП 120
+    const zip = await JSZip.loadAsync(await base());
+    const path = 'xl/worksheets/sheet2.xml';
+    const xml = (await zip.file(path)!.async('string'))
+      .replace('<t>Справка</t>', '<t>Специалистов в базе</t>')
+      .replace(
+        /(<row r="4"[^>]*>[\s\S]*?)(<\/row>)/,
+        '$1<c r="L4" s="6" t="inlineStr"><is><t>Траматолог</t></is></c><c r="M4" s="6"><v>10</v></c>$2',
+      )
+      .replace(
+        /(<row r="5"[^>]*>[\s\S]*?)(<\/row>)/,
+        '$1<c r="L5" s="6" t="inlineStr"><is><t>ВОП</t></is></c><c r="M5" s="8"><v>120</v></c>$2',
+      );
+    zip.file(path, xml);
+    const res = await fillBase(
+      await zip.generateAsync({ type: 'nodebuffer' }),
+      {
+        mp: 'Тестов Тест',
+        doctors: ['ВОП', 'воп фильтр', 'гиниколог', 'Гинеколог', 'ВОП'].map(
+          (specialty, i) => ({ ...doctor(i), specialty }),
+        ),
+        pharmacies: [
+          { fullName: 'Айгуль', place: 'Аптека 1', address: 'Тестовая 1' },
+          { fullName: 'Роза', place: 'Аптека 1', address: 'Тестовая 1' },
+          { fullName: 'Айгуль', place: 'Аптека 1', address: 'Тестовая 9' },
+        ],
+      },
+    );
+    const { xml: out, values } = await readSheet(res.file, 2, 'Z');
+    const formula = (ref: string) =>
+      out
+        .match(new RegExp(`<c r="${ref}"[^>]*><f>([^<]*)</f><v>([^<]*)</v>`))
+        ?.slice(1);
+
+    // сводка — правее таблички руководителя (L–M): O — подпись, P — число
+    expect([values[3].O, values[3].P]).toEqual([
+      'Специалистов в базе',
+      'Врачей',
+    ]);
+    expect([values[4].O, values[5].O]).toEqual(['ВОП', 'Гинеколог']);
+    expect(formula('P4')).toEqual([
+      'SUM(COUNTIF($E$3:$E$2002,{&quot;ВОП&quot;,&quot;воп фильтр&quot;}))',
+      '3',
+    ]);
+    expect(formula('P5')?.[1]).toBe('2');
+    expect(values[6].O).toBe('Всего врачей');
+    expect(formula('P6')?.[1]).toBe('5');
+    // аптек — разных по названию и адресу
+    expect(values[8].O).toBe('Аптек');
+    expect(formula('P8')?.[1]).toBe('2');
+
+    // табличка руководителя: числа — ссылки на сводку, стиль ячеек свой
+    expect(formula('M5')).toEqual(['P4', '3']);
+    expect(out).toMatch(/<c r="M5" s="8"><f>/);
+    expect(formula('M4')).toEqual(['0', '0']); // травматологов нет
+
+    // ячейки в строках — по порядку колонок (иначе Excel считает файл битым)
+    for (const row of out.match(/<row\b[\s\S]*?<\/row>/g)!) {
+      const cols = [...row.matchAll(/<c r="([A-Z]+)\d+"/g)].map((m) => m[1]);
+      const sorted = [...cols].sort(
+        (a, b) => a.length - b.length || (a < b ? -1 : 1),
+      );
+      expect(cols).toEqual(sorted);
+    }
+  });
+
+  it('цепочка вычислений (calcChain) убирается — иначе Excel считает книгу повреждённой', async () => {
+    const zip = await JSZip.loadAsync(await base());
+    zip.file('xl/calcChain.xml', '<calcChain><c r="N10" i="2"/></calcChain>');
+    zip.file(
+      '[Content_Types].xml',
+      '<Types><Override PartName="/xl/calcChain.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.calcChain+xml"/></Types>',
+    );
+    zip.file(
+      'xl/_rels/workbook.xml.rels',
+      (await zip.file('xl/_rels/workbook.xml.rels')!.async('string')).replace(
+        '</Relationships>',
+        '<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/calcChain" Target="calcChain.xml"/></Relationships>',
+      ),
+    );
+    const res = await fillBase(
+      await zip.generateAsync({ type: 'nodebuffer' }),
+      {
+        mp: 'Тестов Тест',
+        doctors: [doctor(0)],
+        pharmacies: [],
+      },
+    );
+    const out = await JSZip.loadAsync(res.file);
+    expect(out.file('xl/calcChain.xml')).toBeNull();
+    expect(
+      await out.file('[Content_Types].xml')!.async('string'),
+    ).not.toContain('calcChain');
+    const rels = await out.file('xl/_rels/workbook.xml.rels')!.async('string');
+    expect(rels).not.toContain('calcChain');
+    expect(rels).toContain('worksheets/sheet2.xml'); // остальные связи на месте
   });
 });

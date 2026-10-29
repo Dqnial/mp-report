@@ -136,29 +136,25 @@ export const renumberRow = (xml: string, to: number) =>
     .replace(/^(<row\b[^>]*?\sr=")\d+"/, (_, p: string) => `${p}${to}"`)
     .replace(/(<c\b[^>]*?\sr="[A-Z]+)\d+"/g, (_, p: string) => `${p}${to}"`);
 
-/** Вписывает значение в ячейку строки, сохраняя её стиль (атрибут s). */
+/**
+ * Заменить ячейку строки (или вставить по порядку колонок, если её нет).
+ * build получает атрибуты ячейки без типа t: у существующей — её (стиль s
+ * сохраняется), у новой — r и стиль style, если задан.
+ */
 // замены — функциями: в строке-замене `$&`, `$1` из текста визита сработали бы как шаблоны
-export function setCellInRow(
+function putCell(
   rowXml: string,
   ref: string,
-  value: string,
-  existing?: Cell,
+  existing: Cell | undefined,
+  build: (attrs: string) => string,
+  style?: string,
 ) {
-  if (value === '') {
-    if (!existing) return rowXml;
-    const attrs = existing.attrs.replace(/\s+t="[^"]*"/, '');
-    return rowXml.replace(existing.xml, () => `<c${attrs}/>`);
-  }
-  const text = escapeXml(stripInvalidXmlChars(value));
-  const inner = `<is><t xml:space="preserve">${text}</t></is>`;
   if (existing) {
     const attrs = existing.attrs.replace(/\s+t="[^"]*"/, '');
-    const cell = `<c${attrs} t="inlineStr">${inner}</c>`;
-    return rowXml.replace(existing.xml, () => cell);
+    return rowXml.replace(existing.xml, () => build(attrs));
   }
-  // ячейки нет в XML — вставляем по порядку колонок
   const col = ref.replace(/\d+/g, '');
-  const cell = `<c r="${ref}" t="inlineStr">${inner}</c>`;
+  const cell = build(` r="${ref}"${style ? ` s="${style}"` : ''}`);
   if (rowXml.endsWith('/>')) return `${rowXml.slice(0, -2)}>${cell}</row>`;
   const next = [...rowXml.matchAll(/<c\b[^>]*?\sr="([A-Z]+)\d+"/g)].find(
     (c) => colToNum(c[1]) > colToNum(col),
@@ -166,6 +162,50 @@ export function setCellInRow(
   return next
     ? rowXml.replace(next[0], () => cell + next[0])
     : rowXml.replace(/<\/row>$/, () => `${cell}</row>`);
+}
+
+/** Вписывает значение в ячейку строки, сохраняя её стиль (атрибут s). */
+export function setCellInRow(
+  rowXml: string,
+  ref: string,
+  value: string,
+  existing?: Cell,
+  style?: string,
+) {
+  if (value === '') {
+    if (!existing) return rowXml;
+    return putCell(rowXml, ref, existing, (attrs) => `<c${attrs}/>`);
+  }
+  const text = escapeXml(stripInvalidXmlChars(value));
+  return putCell(
+    rowXml,
+    ref,
+    existing,
+    (attrs) =>
+      `<c${attrs} t="inlineStr"><is><t xml:space="preserve">${text}</t></is></c>`,
+    style,
+  );
+}
+
+/**
+ * Формула с уже посчитанным значением: Excel пересчитает при правке, а до
+ * того (и в просмотрщиках, которые не считают формулы) видно value.
+ */
+export function setFormulaInRow(
+  rowXml: string,
+  ref: string,
+  formula: string,
+  value: number,
+  existing?: Cell,
+  style?: string,
+) {
+  return putCell(
+    rowXml,
+    ref,
+    existing,
+    (attrs) => `<c${attrs}><f>${escapeXml(formula)}</f><v>${value}</v></c>`,
+    style,
+  );
 }
 
 /** Таблица общих строк книги (значения ячеек t="s"). */
@@ -182,5 +222,37 @@ export async function openXlsx(file: Buffer) {
     return await JSZip.loadAsync(file);
   } catch {
     throw new TemplateFormatError('Это не файл Excel (.xlsx)');
+  }
+}
+
+/**
+ * Убрать цепочку вычислений (xl/calcChain.xml) — список ячеек с формулами.
+ * После правки формул она устаревает, и Excel считает книгу повреждённой
+ * («Ошибка в части содержимого»); без неё он строит её заново при открытии.
+ */
+export async function dropCalcChain(zip: JSZip) {
+  if (!zip.file('xl/calcChain.xml')) return;
+  zip.remove('xl/calcChain.xml');
+  const types = await readPart(zip, '[Content_Types].xml');
+  if (types) {
+    zip.file(
+      '[Content_Types].xml',
+      types.replace(
+        /<Override\b[^>]*PartName="\/xl\/calcChain\.xml"[^>]*\/>/,
+        '',
+      ),
+      { createFolders: false },
+    );
+  }
+  const rels = await readPart(zip, 'xl/_rels/workbook.xml.rels');
+  if (rels) {
+    zip.file(
+      'xl/_rels/workbook.xml.rels',
+      rels.replace(
+        /<Relationship\b[^>]*Target="[^"]*calcChain\.xml"[^>]*\/>/,
+        '',
+      ),
+      { createFolders: false },
+    );
   }
 }
