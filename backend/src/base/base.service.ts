@@ -78,10 +78,14 @@ export class BaseService {
    * Справочник помнит всех, кого когда-либо вводили: опечатки, удалённые
    * визиты, старое ФИО после исправления. В базу — только те, у кого есть
    * живой (не удалённый) визит, из приложения или из файла.
+   *
+   * Врачи — из справочника; аптеки — из визитов (провизоры-тёзки из разных
+   * аптек в справочнике — одна запись): место — из визита, имя — из
+   * справочника (там правки), специальность и телефон — из визита в эту аптеку.
    */
   private async rows(userId: string) {
     const live = { deletedAt: null };
-    const [contacts, pharmacies, pharmacyVisits] = await Promise.all([
+    const [contacts, pharmacyVisits, hiddenPharmacies] = await Promise.all([
       this.prisma.contact.findMany({
         where: { userId, hiddenFromBase: false, visits: { some: live } },
         select: {
@@ -89,48 +93,60 @@ export class BaseService {
           specialty: true,
           phone: true,
           potential: true,
-          place: {
-            select: { id: true, kind: true, name: true, address: true },
-          },
+          place: { select: { kind: true, name: true, address: true } },
           visits: {
             where: live,
-            select: { kind: true, products: true, date: true },
-            orderBy: { date: 'desc' },
+            select: { kind: true, products: true, date: true, phone: true },
+            orderBy: [{ date: 'desc' }, { updatedAt: 'desc' }],
           },
-        },
-      }),
-      // аптеки, где провизор не записан, — строкой без ФИО
-      this.prisma.place.findMany({
-        where: { userId, kind: 'PHARMACY', hiddenFromBase: false },
-        select: {
-          id: true,
-          name: true,
-          address: true,
-          // и скрытые из базы: аптека со скрытым провизором — не «пустая»
-          contacts: { select: { fullName: true } },
         },
       }),
       this.prisma.visit.findMany({
         where: { userId, kind: 'PHARMACY', ...live, placeName: { not: null } },
-        select: { placeName: true, address: true },
-        distinct: ['placeName', 'address'],
+        select: {
+          placeName: true,
+          address: true,
+          fullName: true,
+          specialty: true,
+          phone: true,
+          contact: {
+            select: {
+              fullName: true,
+              specialty: true,
+              phone: true,
+              hiddenFromBase: true,
+            },
+          },
+        },
+        orderBy: [{ date: 'desc' }, { updatedAt: 'desc' }],
+      }),
+      this.prisma.place.findMany({
+        where: { userId, kind: 'PHARMACY', hiddenFromBase: true },
+        select: { name: true, address: true },
       }),
     ]);
-    // у места нет связи с визитами — «есть живой визит» сверяем по названию
-    // и адресу, как и при заведении места
-    const visited = (p: { name: string; address: string | null }) =>
-      pharmacyVisits.some(
-        (v) => placeMatch({ name: v.placeName, address: v.address }, p) > 0,
-      );
-    const emptyPharmacies = pharmacies.filter(
-      (p) => !p.contacts.some((c) => c.fullName.trim()) && visited(p),
-    );
 
     // свежие (по последнему визиту) — первыми: при слиянии повторов они главнее
     const last = (c: (typeof contacts)[number]) =>
       c.visits[0]?.date.getTime() ?? 0;
     contacts.sort((a, b) => last(b) - last(a));
-    return buildBaseRows(contacts, emptyPharmacies);
+
+    const pharmacies = pharmacyVisits
+      .filter((v) => !v.contact?.hiddenFromBase)
+      .filter(
+        (v) =>
+          !hiddenPharmacies.some(
+            (p) => placeMatch({ name: v.placeName, address: v.address }, p) > 0,
+          ),
+      )
+      .map((v) => ({
+        placeName: v.placeName!,
+        address: v.address,
+        fullName: v.contact?.fullName ?? v.fullName,
+        specialty: v.specialty || v.contact?.specialty || null,
+        phone: v.phone || v.contact?.phone || null,
+      }));
+    return buildBaseRows(contacts, pharmacies);
   }
 }
 
