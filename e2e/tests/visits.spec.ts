@@ -23,7 +23,7 @@ test('визит записывается, уходит на сервер и в�
   await addDoctorVisit(page, name);
 
   await expect(page.getByText(name)).toBeVisible();
-  await expect(page.getByText('Всё на сервере')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Всё на сервере' })).toBeVisible();
 
   // данные экрана — из памяти телефона; убеждаемся, что дошло и до сервера
   const res = await page.request.get('/api/visits/search?q=' + encodeURIComponent(name));
@@ -38,7 +38,7 @@ test('без сети визит сохраняется на телефоне и
   context,
 }) => {
   await openApp(page);
-  await expect(page.getByText('Всё на сервере')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Всё на сервере' })).toBeVisible();
 
   await context.setOffline(true);
   const name = unique('Офлайнова Мария');
@@ -47,7 +47,7 @@ test('без сети визит сохраняется на телефоне и
   await expect(page.getByText(/отправки · нет сети/)).toBeVisible();
 
   await context.setOffline(false);
-  await expect(page.getByText('Всё на сервере')).toBeVisible({
+  await expect(page.getByRole('button', { name: 'Всё на сервере' })).toBeVisible({
     timeout: 45_000,
   });
   const res = await page.request.get('/api/visits/search?q=' + encodeURIComponent(name));

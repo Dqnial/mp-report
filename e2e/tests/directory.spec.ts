@@ -125,7 +125,7 @@ test('визит из файла: исправление переписывае�
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Сохранить' }).click();
   await expect(page.getByText(fixed)).toBeVisible();
-  await expect(page.getByText('Всё на сервере')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Всё на сервере' })).toBeVisible();
 
   const reportSheet = async () =>
     (

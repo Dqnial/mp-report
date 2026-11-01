@@ -115,7 +115,8 @@ export interface PreviewRow {
     'E' | 'F' | 'G' | 'H' | 'I' | 'J' | 'K' | 'L' | 'M' | 'N',
     string
   >;
-  source: 'file' | 'app' | 'empty';
+  /** plan — врач из плана (ФИО в шаблоне), визита к нему ещё нет */
+  source: 'file' | 'app' | 'plan' | 'empty';
   added: boolean;
   visitId?: string;
 }
@@ -165,6 +166,19 @@ export interface PlanGroup {
   used: number;
   /** из плана в файле, а не открыта визитом не по плану */
   inFile: boolean;
+  /**
+   * врачи, вписанные в план (ФИО в шаблоне); visited — визит к нему уже есть.
+   * В старом кэше телефона поля нет.
+   */
+  doctors?: PlannedDoctor[];
+}
+
+export interface PlannedDoctor {
+  row: number;
+  fullName: string;
+  specialty: string;
+  phone: string;
+  visited: boolean;
 }
 
 export interface DayPlan {

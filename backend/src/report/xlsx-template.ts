@@ -6,6 +6,7 @@
 // а все остальные части копируем как есть (примитивы — xlsx/xlsx-xml.ts).
 import JSZip from 'jszip';
 import { shortRu as fmt } from '../common/dates';
+import { nameMatch, normName, samePhone } from '../common/person-match';
 import { placeMatch } from '../common/place-match';
 import {
   attr,
@@ -42,8 +43,21 @@ export const VISIT_COLS = {
 /** Метка в C — как в шаблоне руководителя (чаще всего так и написано). */
 const KIND_LABEL = { DOCTOR: 'Врач', PHARMACY: 'Аптека' } as const;
 
-/** Слот занят, если в любой из этих колонок что-то есть. E/F — это план. */
-const VISIT_DATA_COLS = ['G', 'H', 'I', 'J', 'K', 'L', 'M', 'N'];
+/**
+ * Колонки визита. G–I — кто (ФИО, специальность, телефон), J–N — что было
+ * на визите (препараты, комментарий). Строка с данными в J–N — сделанный
+ * визит; только с G–I — запланированный врач (план с врачами); пустая — для
+ * визита. E/F — ЛПУ и адрес плана.
+ */
+const PERSON_COLS = ['G', 'H', 'I'];
+const DONE_COLS = ['J', 'K', 'L', 'M', 'N'];
+
+/** Запланированный врач/провизор: строка плана с ФИО, но без визита. */
+export interface PlannedPerson {
+  fullName: string;
+  specialty: string;
+  phone: string;
+}
 
 export interface VisitCells {
   /** clientId визита — для предпросмотра (строка → визит) */
@@ -67,7 +81,10 @@ export interface VisitCells {
 export interface Slot {
   row: number;
   numbered: boolean;
+  /** визита в строке нет (J–N пусты); у запланированного врача — тоже free */
   free: boolean;
+  /** строка плана с врачом: её занимает только визит к нему */
+  planned?: PlannedPerson;
   /** своё E этой строки (непусто — строка-заголовок группы) */
   plannedPlace: string;
   plannedAddress: string;
@@ -190,10 +207,17 @@ function findDays(rows: Row[], xml: string): DayBlock[] {
         groupPlace = plannedPlace;
         groupAddress = plannedAddress;
       }
+      const v = (c: string) => r.cells.get(c)?.value ?? '';
+      const done = DONE_COLS.some((c) => v(c));
+      const person = PERSON_COLS.some((c) => v(c));
       return {
         row: r.r,
         numbered: isSlotNumber(r),
-        free: VISIT_DATA_COLS.every((c) => !r.cells.get(c)?.value),
+        free: !done,
+        ...(!done &&
+          person && {
+            planned: { fullName: v('G'), specialty: v('H'), phone: v('I') },
+          }),
         plannedPlace,
         plannedAddress,
         groupPlace,
@@ -296,6 +320,8 @@ export interface PlanGroup {
   used: number;
   /** группа есть в файле (план или уже записанное), а не открыта визитом */
   inFile: boolean;
+  /** врачи из плана (строки с ФИО без визита) и были ли у них сегодня */
+  doctors: (PlannedPerson & { row: number; visited: boolean })[];
 }
 
 export interface DayPlacement {
@@ -321,7 +347,12 @@ export interface DayPlacement {
  */
 export function placeDay(
   day: DayBlock,
-  visits: { placeName?: string | null; address?: string | null }[],
+  visits: {
+    placeName?: string | null;
+    address?: string | null;
+    fullName?: string | null;
+    phone?: string | null;
+  }[],
   { reusePlan = false }: { reusePlan?: boolean } = {},
 ): DayPlacement {
   const rows = day.slots.map((s) => ({
@@ -342,6 +373,45 @@ export function placeDay(
     return [start, end];
   };
   const heads = () => rows.flatMap((r, i) => (r.head ? [i] : []));
+  /** строка для любого визита: пустая, не занятая и не за врачом из плана */
+  const open = (r: (typeof rows)[number]) => r.free && !r.planned;
+
+  // один телефон бывает на всю регистратуру — без ФИО он годится, а при
+  // другом ФИО совпасть должно хотя бы имя (фамилию меняют, имя — нет)
+  const sameGiven = (a: string, b: string) => {
+    const x = normName(a).split(' ')[1];
+    return !!x && x === normName(b).split(' ')[1];
+  };
+  /**
+   * Насколько визит похож на запланированного врача (0 — не он). ФИО и
+   * телефон со временем меняются, поэтому: ФИО то же или с опечаткой в
+   * отчестве; без отчества — если то же место или телефон; ФИО исправили —
+   * по телефону. При равенстве — в том же месте, что визит.
+   */
+  const plannedScore = (
+    v: (typeof visits)[number],
+    r: (typeof rows)[number],
+  ) => {
+    if (!r.planned) return 0;
+    const name = nameMatch(v.fullName, r.planned.fullName);
+    const phone = samePhone(v.phone, r.planned.phone);
+    const place = v.placeName
+      ? placeMatch(
+          { name: v.placeName, address: v.address },
+          { name: r.groupPlace, address: r.groupAddress },
+        )
+      : 0;
+    const who =
+      name === 'same' || name === 'typo'
+        ? 3
+        : name === 'partial' && (place > 0 || phone)
+          ? 2
+          : phone &&
+              (!v.fullName?.trim() || sameGiven(v.fullName, r.planned.fullName))
+            ? 1
+            : 0;
+    return who && who * 10 + place;
+  };
 
   /** Свободная строка в группе этого места; сначала — где адрес совпал точно. */
   const freeInGroupOf = (place: string, address?: string | null) => {
@@ -357,7 +427,7 @@ export function placeDay(
       .sort((a, b) => b.score - a.score);
     for (const { h } of candidates) {
       const [, end] = groupOf(h);
-      for (let i = h; i < end; i++) if (rows[i].free) return i;
+      for (let i = h; i < end; i++) if (open(rows[i])) return i;
     }
     return -1;
   };
@@ -369,9 +439,9 @@ export function placeDay(
    */
   const splitPoint = () => {
     const valid = (i: number) => {
-      if (!rows[i].free || rows[i].head) return false;
+      if (!open(rows[i]) || rows[i].head) return false;
       const [, end] = groupOf(i);
-      return rows.slice(i, end).every((x) => x.free);
+      return rows.slice(i, end).every(open);
     };
     let last = -1;
     for (let i = rows.length - 1; i >= 0 && last < 0; i--) {
@@ -389,7 +459,8 @@ export function placeDay(
     for (const h of heads().reverse()) {
       if (!rows[h].inFile || rows[h].newHead || rows[h].boundary) continue;
       const [, end] = groupOf(h);
-      if (rows.slice(h, end).every((x) => x.free)) return h;
+      // группу с врачами из плана не отдаём другому месту
+      if (rows.slice(h, end).every(open)) return h;
     }
     return -1;
   };
@@ -416,8 +487,25 @@ export function placeDay(
     };
   };
 
+  // 0) к врачу из плана — в его строку. Сначала самые верные пары по всему
+  // дню: визит без ФИО с общим телефоном не должен занять строку врача раньше,
+  // чем дойдёт очередь до визита к нему самому
+  visits
+    .flatMap((v, vi) =>
+      v.fullName?.trim() || v.phone?.trim()
+        ? rows.flatMap((r, i) => {
+            const score = r.free ? plannedScore(v, r) : 0;
+            return score ? [{ vi, i, score }] : [];
+          })
+        : [],
+    )
+    .sort((a, b) => b.score - a.score)
+    .forEach(({ vi, i }) => {
+      if (!placements[vi] && rows[i].free) take(vi, i);
+    });
   // 1) по плану
   visits.forEach((v, vi) => {
+    if (placements[vi]) return;
     if (!v.placeName) return;
     const i = freeInGroupOf(v.placeName, v.address);
     if (i >= 0) take(vi, i);
@@ -451,6 +539,9 @@ export function placeDay(
         capacity: members.length,
         used: members.filter((r) => !r.free).length,
         inFile: rows[h].inFile,
+        doctors: members.flatMap((r) =>
+          r.planned ? [{ ...r.planned, row: r.row, visited: !r.free }] : [],
+        ),
       };
     });
   return { placements, groups };
@@ -694,8 +785,12 @@ function applyFileEdits(
       put.set(VISIT_COLS.placeName, v.placeName!.trim());
       put.set(VISIT_COLS.address, v.address?.trim() ?? '');
       const next = at.day.slots[at.i + 1];
+      // занята визитом, за врачом из плана или в неё только что лёг визит
       const nextUsed =
-        next && (!next.free || finalEdits.has(shiftRow(next.row, insertions)));
+        next &&
+        (!next.free ||
+          !!next.planned ||
+          finalEdits.has(shiftRow(next.row, insertions)));
       if (nextUsed && !next.plannedPlace && slot.groupPlace) {
         putAt(
           next.row,
@@ -925,8 +1020,11 @@ export interface PreviewRow {
   num: string;
   label: string;
   cells: Record<PreviewCol, string>;
-  /** file — записано в шаблоне; app — визит из приложения; empty — пусто */
-  source: 'file' | 'app' | 'empty';
+  /**
+   * file — визит, уже записанный в шаблоне; app — визит из приложения;
+   * plan — врач из плана, визита к нему пока нет; empty — пусто
+   */
+  source: 'file' | 'app' | 'plan' | 'empty';
   /** строку добавили (визитов больше, чем строк) */
   added: boolean;
   /** визит из приложения в этой строке */
@@ -978,13 +1076,14 @@ export async function previewDay(
     ) as Record<PreviewCol, string>;
     const visitId = rowVisit.get(r);
     // с учётом правок: удалённый визит «из файла» оставляет строку пустой
-    const filledInFile = VISIT_DATA_COLS.some((c) => !!value(c));
+    const done = DONE_COLS.some((c) => !!value(c));
+    const person = PERSON_COLS.some((c) => !!value(c));
     rows.push({
       row: r,
       num: src?.cells.get('B')?.value ?? '',
       label: value(VISIT_COLS.kind),
       cells,
-      source: visitId ? 'app' : filledInFile ? 'file' : 'empty',
+      source: visitId ? 'app' : done ? 'file' : person ? 'plan' : 'empty',
       added: !original.has(r),
       visitId,
     });

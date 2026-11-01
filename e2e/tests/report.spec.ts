@@ -1,6 +1,13 @@
 import JSZip from 'jszip';
 import { expect, test } from '@playwright/test';
-import { makeTemplate, openApp, today, unique } from '../fixtures';
+import {
+  makeTemplate,
+  openApp,
+  today,
+  unique,
+  uniqueWord,
+  uploadTemplate,
+} from '../fixtures';
 
 test('шаблон → план дня → визит по плану → предпросмотр и готовый xlsx', async ({
   page,
@@ -35,7 +42,7 @@ test('шаблон → план дня → визит по плану → пре
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Сохранить' }).click();
   await expect(page.getByText(name)).toBeVisible();
-  await expect(page.getByText('Всё на сервере')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Всё на сервере' })).toBeVisible();
 
   // предпросмотр: визит — в строке группы своего ЛПУ, «из приложения»
   await page.goto(`/report/preview?date=${today()}`);
@@ -122,4 +129,72 @@ test('отчёт: повторный заход не качает файл за�
     .file('xl/worksheets/sheet1.xml')!
     .async('string');
   expect(sheet).toContain(name);
+});
+
+test('план с врачами: врачи видны в плане дня, визит к врачу — в его строку, строки плана не становятся визитами', async ({
+  page,
+}) => {
+  const month = today().slice(0, 7);
+  const day = today().endsWith('-01') ? 2 : 1;
+  const date = `${month}-${String(day).padStart(2, '0')}`;
+  // уникальная часть — в фамилии: третьим словом её сочли бы отчеством,
+  // а отчества разных прогонов — опечатками одного
+  const tag = uniqueWord();
+  const first = `Планова${tag} Анна Ивановна`;
+  const second = `Запланов${tag} Ерлан`;
+  // свой номер на каждый прогон: визиты прошлых прогонов к тому же номеру
+  // не должны занимать строку
+  const phone = '8701' + String(Date.now()).slice(-7);
+  await uploadTemplate(
+    page.request,
+    await makeTemplate(undefined, {
+      day,
+      doctors: [
+        { fullName: first, specialty: 'ВОП', phone },
+        { fullName: second, specialty: 'Терапевт' },
+      ],
+    }),
+  );
+  // ФИО из плана — не сделанные визиты: при загрузке не импортируются
+  const search = async (q: string) =>
+    (
+      (await (
+        await page.request.get('/api/visits/search?q=' + encodeURIComponent(q))
+      ).json()) as { visits: unknown[] }
+    ).visits;
+  expect(await search(first)).toHaveLength(0);
+
+  await openApp(page);
+  await page.goto(`/day/${date}`);
+  await page.getByRole('link', { name: `Визит к врачу: ${first}` }).click();
+  // форма уже с врачом и ЛПУ из плана
+  await expect(page.getByRole('combobox', { name: 'ФИО врача' })).toHaveValue(
+    first,
+  );
+  await expect(page.getByRole('combobox', { name: 'ЛПУ' })).toHaveValue(
+    'Городская поликлиника №3',
+  );
+  await page.getByText('Коф Йог', { exact: true }).click();
+  await page.getByRole('button', { name: 'Сохранить' }).click();
+  await expect(page.getByRole('button', { name: 'Всё на сервере' })).toBeVisible();
+
+  // в плане: первый — «был», ко второму ещё можно зайти
+  await expect(page.getByLabel(`Был: ${first}`)).toBeVisible();
+  await expect(
+    page.getByRole('link', { name: `Визит к врачу: ${second}` }),
+  ).toBeVisible();
+
+  // в отчёте препарат — в строке первого врача, второй остался планом
+  const sheet = await (
+    await JSZip.loadAsync(
+      await (await page.request.get(`/api/reports/${month}`)).body(),
+    )
+  )
+    .file('xl/worksheets/sheet1.xml')!
+    .async('string');
+  const rowOf = (name: string) =>
+    sheet.split('</row>').find((r) => r.includes(name)) ?? '';
+  expect(rowOf(first)).toContain('Коф Йог');
+  expect(rowOf(second)).toContain(second);
+  expect(rowOf(second)).not.toContain('Коф Йог');
 });

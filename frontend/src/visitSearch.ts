@@ -50,7 +50,7 @@ export function applyFilters(list: LocalVisit[], f: VisitFilters) {
   return list.filter(
     (v) =>
       (f.kind === 'all' || v.kind === f.kind) &&
-      (!f.gaps || (!v.fromFile && missingFields(v).length > 0)) &&
+      (!f.gaps || missingFields(v).length > 0) &&
       (!f.unsent || v.syncState !== 'synced'),
   );
 }

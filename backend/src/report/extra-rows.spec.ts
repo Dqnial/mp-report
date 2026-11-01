@@ -42,7 +42,8 @@ function row(
     cell(`E${r}`, s, opts.place) +
     cell(`F${r}`, s, opts.address) +
     cell(`G${r}`, s, opts.filled) +
-    cell(`N${r}`, s) +
+    // сделанный визит — с комментарием (строка только с ФИО — врач из плана)
+    cell(`N${r}`, s, opts.filled && 'был') +
     `</row>`
   );
 }
@@ -117,10 +118,16 @@ const text = (sheet: string, ref: string) =>
 
 describe('визитов больше, чем строк', () => {
   it('добавляет строки перед последней строкой дня и сдвигает всё ниже', async () => {
-    const visits = [1, 2, 3, 4, 5, 6].map((i) =>
-      visit('2026-10-01', 'ГП 1', `Врач ${i}`),
-    );
-    visits.push(visit('2026-10-02', 'ГП 2', 'Врач завтра'));
+    // с комментарием, как настоящие визиты: строка только с ФИО читается
+    // обратно как врач из плана, а не сделанный визит
+    const visits = [1, 2, 3, 4, 5, 6].map((i) => ({
+      ...visit('2026-10-01', 'ГП 1', `Врач ${i}`),
+      comment: 'посмотрит',
+    }));
+    visits.push({
+      ...visit('2026-10-02', 'ГП 2', 'Врач завтра'),
+      comment: 'посмотрит',
+    });
     const res = await fillTemplate(await template(), visits);
 
     expect(res.placed).toBe(7);

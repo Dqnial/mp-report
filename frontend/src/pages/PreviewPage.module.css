@@ -25,6 +25,12 @@
   background: transparent;
 }
 
+.row[data-source='plan'] {
+  border-style: dashed;
+  border-left-style: solid;
+  border-left-color: var(--mantine-color-blue-3);
+}
+
 .text {
   overflow-wrap: anywhere;
 }

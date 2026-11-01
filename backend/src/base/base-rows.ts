@@ -8,7 +8,8 @@
 // Аптеки — из визитов: провизоров записывают по имени («Айгуль»), и справочник
 // считает тёзок из разных аптек одним человеком с одной аптекой. Строка — каждая
 // пара «аптека + провизор», которая была в визитах.
-import { levenshtein, normPlace } from '../common/place-match';
+import { normName, nameMatch } from '../common/person-match';
+import { normPlace } from '../common/place-match';
 import { PRODUCTS, productLabel } from '../products';
 import type { BaseRecord } from './base-xlsx';
 
@@ -46,14 +47,6 @@ export interface PharmacyVisit {
   phone: string | null;
 }
 
-const normName = (s: string) =>
-  s
-    .toLowerCase()
-    .replace(/ё/g, 'е')
-    .replace(/[^a-zа-я\s-]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
 const normText = (s?: string | null) => normPlace(s ?? '');
 
 /**
@@ -63,14 +56,8 @@ const normText = (s?: string | null) => normPlace(s ?? '');
  * (иначе это могут быть тёзки из разных поликлиник).
  */
 export function samePerson(a: DirectoryContact, b: DirectoryContact) {
-  const x = normName(a.fullName).split(' ');
-  const y = normName(b.fullName).split(' ');
-  if (x.join(' ') === y.join(' ')) return true;
-  if (x.length < 2 || y.length < 2) return false;
-  if (x[0] !== y[0] || x[1] !== y[1]) return false;
-  const rx = x.slice(2).join(' ');
-  const ry = y.slice(2).join(' ');
-  if (rx && ry) return levenshtein(rx, ry) <= 2;
+  const match = nameMatch(a.fullName, b.fullName);
+  if (match !== 'partial') return match !== 'none';
   const samePlace =
     !!a.place && !!b.place && normText(a.place.name) === normText(b.place.name);
   const sameSpecialty =

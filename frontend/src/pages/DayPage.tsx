@@ -16,6 +16,7 @@ import {
 import { useLocalStorage } from '@mantine/hooks';
 import {
   IconAlertTriangle,
+  IconArrowBackUp,
   IconBuildingStore,
   IconCheck,
   IconChevronDown,
@@ -25,13 +26,14 @@ import {
   IconPlus,
   IconSearch,
   IconStethoscope,
+  IconUser,
 } from '@tabler/icons-react';
-import { useEffect } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useDayVisits, usePlan, useSyncStatus } from '../api/queries';
-import type { PlanGroup } from '../api/types';
+import type { PlanGroup, PlannedDoctor } from '../api/types';
 import { DockActions } from '../components/Layout';
-import { SyncBadge } from '../components/SyncBadge';
+import { SyncBadge, SyncIcon } from '../components/SyncBadge';
 import { VisitCard } from '../components/VisitCard';
 import { formatDay, monthOf, shiftWorkday, todayIso } from '../dates';
 import { ensureMonth } from '../offline/sync';
@@ -59,6 +61,7 @@ export function DayPage() {
   const go = (iso: string) =>
     navigate(iso === todayIso() ? '/' : `/day/${iso}`, { replace: true });
 
+  const searchBar = useHideOnScrollDown();
   const list = visits.data ?? [];
   const doctors = list.filter((v) => v.kind === 'DOCTOR').length;
 
@@ -77,10 +80,21 @@ export function DayPage() {
           <Title order={3} ta="center">
             {isToday ? 'Сегодня' : capitalize(formatDay(date))}
           </Title>
-          {isToday && (
+          {isToday ? (
             <Text size="sm" c="dimmed">
               {formatDay(date)}
             </Text>
+          ) : (
+            <Button
+              variant="light"
+              size="compact-sm"
+              radius="xl"
+              mt={4}
+              leftSection={<IconArrowBackUp size={16} />}
+              onClick={() => go(todayIso())}
+            >
+              К сегодня
+            </Button>
           )}
         </Stack>
         <ActionIcon
@@ -93,23 +107,27 @@ export function DayPage() {
         </ActionIcon>
       </Group>
 
-      {/* крупная «строка поиска» — ведёт на экран поиска с этим днём */}
-      <UnstyledButton
-        component={Link}
-        to={`/search?date=${date}`}
-        className={classes.search}
+      {/* крупная «строка поиска» — ведёт на экран поиска с этим днём;
+          рядом облако синхронизации, текст — только если что-то не так.
+          Прилипает к верху: листаешь вниз — уезжает, потянул вверх — снова тут */}
+      <div
+        className={classes.searchBar}
+        data-hidden={searchBar.hidden || undefined}
+        data-floating={searchBar.floating || undefined}
       >
-        <IconSearch size={20} />
-        <Text c="dimmed">Поиск по визитам…</Text>
-      </UnstyledButton>
-
-      <SyncBadge />
-
-      {!isToday && (
-        <Button variant="subtle" size="xs" onClick={() => go(todayIso())}>
-          Вернуться к сегодня
-        </Button>
-      )}
+        <Group gap="xs" wrap="nowrap">
+          <UnstyledButton
+            component={Link}
+            to={`/search?date=${date}`}
+            className={classes.search}
+          >
+            <IconSearch size={20} />
+            <Text c="dimmed">Поиск по визитам…</Text>
+          </UnstyledButton>
+          <SyncIcon />
+        </Group>
+        <SyncBadge problemsOnly />
+      </div>
 
       <PlanBlock date={date} />
 
@@ -163,14 +181,39 @@ export function DayPage() {
   );
 }
 
+/**
+ * Как адресная строка в Chrome: прокрутка вниз прячет, вверх — показывает.
+ * Мелкие подёргивания пальца (до 8 px) не считаются; у самого верха — всегда видна.
+ */
+function useHideOnScrollDown() {
+  const [hidden, setHidden] = useState(false);
+  // над карточками (не у самого верха) — с тенью, чтобы край не «резал» их
+  const [floating, setFloating] = useState(false);
+  useEffect(() => {
+    let last = window.scrollY;
+    const onScroll = () => {
+      const y = window.scrollY;
+      setFloating(y > 120);
+      if (y < 120) setHidden(false);
+      else if (Math.abs(y - last) < 8) return;
+      else setHidden(y > last);
+      last = y;
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+  return { hidden, floating };
+}
+
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-const newVisitUrl = (date: string, g: PlanGroup) => {
+const newVisitUrl = (date: string, g: PlanGroup, d?: PlannedDoctor) => {
   const q = new URLSearchParams({
     kind: g.kind,
     date,
     place: g.place,
     address: g.address,
+    ...(d && { fullName: d.fullName, specialty: d.specialty, phone: d.phone }),
   });
   return `/visit/new?${q}`;
 };
@@ -178,6 +221,7 @@ const newVisitUrl = (date: string, g: PlanGroup) => {
 /**
  * План дня из шаблона: ЛПУ и сколько строк под ним. «+» открывает форму
  * с этим ЛПУ — название совпадёт с планом, и визит ляжет в его строки.
+ * Если в плане вписаны врачи — они списком под ЛПУ: нажал — форма уже с ним.
  */
 function PlanBlock({ date }: { date: string }) {
   const plan = usePlan(date);
@@ -234,67 +278,155 @@ function PlanBlock({ date }: { date: string }) {
             // цвета — как у больших кнопок внизу: врач бирюзовый, аптека зелёная
             const color = g.kind === 'PHARMACY' ? 'teal' : 'cyan';
             return (
-              <Group
+              // группа задаёт цвет линии, которая ведёт от ЛПУ к его врачам
+              <div
                 key={g.row}
-                wrap="nowrap"
-                gap="xs"
-                className={classes.planRow}
+                className={classes.planGroup}
+                style={
+                  {
+                    '--plan-line': `var(--mantine-color-${color}-4)`,
+                  } as CSSProperties
+                }
               >
-                <ThemeIcon
-                  size="lg"
-                  radius="xl"
-                  variant="light"
-                  color={color}
-                  aria-label={g.kind === 'PHARMACY' ? 'Аптека' : 'Врач'}
+                <Group
+                  wrap="nowrap"
+                  gap="xs"
+                  className={classes.planRow}
+                  data-doctors={g.doctors?.length ? '' : undefined}
                 >
-                  {g.kind === 'PHARMACY' ? (
-                    <IconBuildingStore size={20} />
-                  ) : (
-                    <IconStethoscope size={20} />
-                  )}
-                </ThemeIcon>
-                {/* название и адрес — целиком, с переносом: по ним ищут место */}
-                <Stack gap={0} style={{ flex: 1, minWidth: 0 }}>
-                  <Text style={{ overflowWrap: 'anywhere' }}>{g.place}</Text>
-                  {!g.inFile && (
-                    <Text size="xs" c="orange.8">
-                      не по плану
-                    </Text>
-                  )}
-                  {g.address && (
-                    <Text
-                      size="xs"
-                      c="dimmed"
-                      style={{ overflowWrap: 'anywhere' }}
-                    >
-                      {g.address}
-                    </Text>
-                  )}
-                </Stack>
-                <Badge
-                  variant={done ? 'filled' : 'light'}
-                  color={done ? 'green' : 'gray'}
-                  leftSection={done ? <IconCheck size={12} /> : undefined}
-                  style={{ flexShrink: 0 }}
-                >
-                  {g.inFile ? `${g.used}/${g.capacity}` : g.used}
-                </Badge>
-                <ActionIcon
-                  component={Link}
-                  to={newVisitUrl(date, g)}
-                  size="xl"
-                  variant="light"
-                  color={color}
-                  style={{ flexShrink: 0 }}
-                  aria-label={`Визит: ${g.place}`}
-                >
-                  <IconPlus />
-                </ActionIcon>
-              </Group>
+                  <ThemeIcon
+                    size="lg"
+                    radius="xl"
+                    variant="light"
+                    color={color}
+                    aria-label={g.kind === 'PHARMACY' ? 'Аптека' : 'Врач'}
+                  >
+                    {g.kind === 'PHARMACY' ? (
+                      <IconBuildingStore size={20} />
+                    ) : (
+                      <IconStethoscope size={20} />
+                    )}
+                  </ThemeIcon>
+                  {/* название и адрес — целиком, с переносом: по ним ищут место */}
+                  <Stack gap={0} style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={{ overflowWrap: 'anywhere' }}>{g.place}</Text>
+                    {!g.inFile && (
+                      <Text size="xs" c="orange.8">
+                        не по плану
+                      </Text>
+                    )}
+                    {g.address && (
+                      <Text
+                        size="xs"
+                        c="dimmed"
+                        style={{ overflowWrap: 'anywhere' }}
+                      >
+                        {g.address}
+                      </Text>
+                    )}
+                  </Stack>
+                  <Badge
+                    variant={done ? 'filled' : 'light'}
+                    color={done ? 'green' : 'gray'}
+                    leftSection={done ? <IconCheck size={12} /> : undefined}
+                    style={{ flexShrink: 0 }}
+                  >
+                    {g.inFile ? `${g.used}/${g.capacity}` : g.used}
+                  </Badge>
+                  <ActionIcon
+                    component={Link}
+                    to={newVisitUrl(date, g)}
+                    size="xl"
+                    variant="light"
+                    color={color}
+                    style={{ flexShrink: 0 }}
+                    aria-label={`Визит: ${g.place}`}
+                  >
+                    <IconPlus />
+                  </ActionIcon>
+                </Group>
+                {(g.doctors ?? []).map((d) => (
+                  <PlannedDoctorRow
+                    key={d.row}
+                    doctor={d}
+                    color={color}
+                    to={newVisitUrl(date, g, d)}
+                  />
+                ))}
+              </div>
             );
           })}
         </Stack>
       </Collapse>
     </Paper>
+  );
+}
+
+/**
+ * Врач из плана — под своим ЛПУ, линией от его значка. Был — зелёная
+ * галочка, нет — вся строка открывает визит к нему.
+ */
+function PlannedDoctorRow({
+  doctor: d,
+  color,
+  to,
+}: {
+  doctor: PlannedDoctor;
+  color: string;
+  to: string;
+}) {
+  const sub = [d.specialty, d.phone].filter(Boolean).join(' · ');
+  const body = (
+    <Group wrap="nowrap" gap="xs" className={classes.planDoctorCard}>
+      <ThemeIcon
+        size="md"
+        radius="xl"
+        variant={d.visited ? 'filled' : 'light'}
+        color={d.visited ? 'green' : color}
+        style={{ flexShrink: 0 }}
+      >
+        {d.visited ? <IconCheck size={16} /> : <IconUser size={16} />}
+      </ThemeIcon>
+      <Stack gap={0} style={{ flex: 1, minWidth: 0 }}>
+        <Text
+          fw={500}
+          c={d.visited ? 'dimmed' : undefined}
+          td={d.visited ? 'line-through' : undefined}
+          style={{ overflowWrap: 'anywhere' }}
+        >
+          {d.fullName}
+        </Text>
+        {sub && (
+          <Text size="sm" c="dimmed" style={{ overflowWrap: 'anywhere' }}>
+            {sub}
+          </Text>
+        )}
+      </Stack>
+      {!d.visited && (
+        <ThemeIcon
+          size="lg"
+          radius="md"
+          variant="light"
+          color={color}
+          style={{ flexShrink: 0 }}
+        >
+          <IconPlus size={20} />
+        </ThemeIcon>
+      )}
+    </Group>
+  );
+  return d.visited ? (
+    <div className={classes.planDoctor} aria-label={`Был: ${d.fullName}`}>
+      {body}
+    </div>
+  ) : (
+    <UnstyledButton
+      component={Link}
+      to={to}
+      className={classes.planDoctor}
+      aria-label={`Визит к врачу: ${d.fullName}`}
+    >
+      {body}
+    </UnstyledButton>
   );
 }

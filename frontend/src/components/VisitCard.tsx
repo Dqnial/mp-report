@@ -20,9 +20,8 @@ import classes from './VisitCard.module.css';
 /**
  * Карточка визита: у каждого поля своё место и значок — ФИО крупно, ЛПУ/аптека,
  * адрес, телефон, препараты. Пустое поле не подменяется другим (раньше без ФИО
- * на его месте стояло название аптеки), а пишется серым «нет …».
- * У визитов «из файла» пустые поля не показываем: их заполняли в Excel до
- * приложения, и пустое там — обычное дело.
+ * на его месте стояло название аптеки), а пишется серым «нет …» — и у визитов
+ * «из файла»: их можно исправить, пусть будет видно, что дописать.
  */
 export function VisitCard({
   visit: v,
@@ -39,14 +38,12 @@ export function VisitCard({
   const missing = new Set(missingFields(v));
   const isPharmacy = v.kind === 'PHARMACY';
 
-  /** значение поля или серое «нет …»; у визитов из файла пустое — не показываем */
+  /** значение поля или серое «нет …» — и у визитов из файла: их можно дописать */
   const field = (name: MissingField, value: ReactNode) =>
     missing.has(name) ? (
-      v.fromFile ? null : (
-        <Text span size="sm" className={classes.missing}>
-          нет {missingLabel(name, v.kind)}
-        </Text>
-      )
+      <Text span size="sm" className={classes.missing}>
+        нет {missingLabel(name, v.kind)}
+      </Text>
     ) : (
       value
     );

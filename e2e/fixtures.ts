@@ -19,6 +19,16 @@ export function today() {
 export const unique = (prefix: string) =>
   `${prefix} ${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`;
 
+/**
+ * Метка для фамилии: только буквы. Цифры при сравнении ФИО — разделители
+ * слов, и метки разных прогонов с общим началом выглядели бы одним человеком
+ * с опечаткой в отчестве.
+ */
+export const uniqueWord = () =>
+  Array.from({ length: 10 }, () =>
+    String.fromCharCode(97 + Math.floor(Math.random() * 26)),
+  ).join('');
+
 /** Открыть приложение уже вошедшим (сессия из tests/auth.setup.ts). */
 export async function openApp(page: Page) {
   await page.goto('/');
@@ -47,7 +57,17 @@ const cell = (ref: string, text?: string) =>
  * Дни — все дни месяца (и выходные), чтобы тесты шли в любой день.
  * filled — строка, уже заполненная в Excel (первая строка плана этого дня).
  */
-export async function makeTemplate(filled?: { day: number; fullName: string }) {
+/**
+ * filled — в первой строке дня уже сделанный визит (ФИО и комментарий);
+ * planned — в строки поликлиники дня вписаны врачи (только G–I, как план).
+ */
+export async function makeTemplate(
+  filled?: { day: number; fullName: string },
+  planned?: {
+    day: number;
+    doctors: { fullName: string; specialty?: string; phone?: string }[];
+  },
+) {
   const now = new Date();
   const y = now.getFullYear();
   const m = now.getMonth();
@@ -76,13 +96,16 @@ export async function makeTemplate(filled?: { day: number; fullName: string }) {
         cell(`D${r}`, i ? undefined : `${pad(d)}.${pad(m + 1)}.${y}`) +
         cell(`E${r}`, s.place) +
         cell(`F${r}`, s.address) +
-        cell(
-          `G${r}`,
-          filled?.day === d && i === 0 ? filled.fullName : undefined,
+        personCells(
+          r,
+          filled?.day === d && i === 0
+            ? { fullName: filled.fullName }
+            : planned?.day === d
+              ? planned.doctors[i]
+              : undefined,
         ) +
-        ['H', 'I', 'J', 'K', 'L', 'M', 'N']
-          .map((c) => cell(`${c}${r}`))
-          .join('') +
+        ['J', 'K', 'L', 'M'].map((c) => cell(`${c}${r}`)).join('') +
+        cell(`N${r}`, filled?.day === d && i === 0 ? 'был, из файла' : undefined) +
         `</row>`;
       r++;
     });
@@ -189,6 +212,14 @@ export async function uploadTemplate(
     )
     .toBe('done');
 }
+
+const personCells = (
+  r: number,
+  p?: { fullName: string; specialty?: string; phone?: string },
+) =>
+  cell(`G${r}`, p?.fullName) +
+  cell(`H${r}`, p?.specialty) +
+  cell(`I${r}`, p?.phone);
 
 const COLS = 'ABCDEFGHIJ';
 

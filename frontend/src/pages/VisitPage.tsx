@@ -45,7 +45,7 @@ import type { Potential, VisitKind, VisitProduct } from '../api/types';
 import { PotentialPicker } from '../components/PotentialPicker';
 import { newClientId } from '../clientId';
 import type { LocalVisit } from '../offline/db';
-import { findPlace } from '../offline/local';
+import { findPlace, searchContacts } from '../offline/local';
 import { formatDay, todayIso } from '../dates';
 import {
   COMMENT_PHRASES,
@@ -94,15 +94,27 @@ export function VisitPage() {
       visit={existing.data ?? undefined}
       dayVisits={day.data ?? []}
       fromPlan={
-        params.get('place')
+        params.get('place') || params.get('fullName')
           ? {
-              place: params.get('place')!,
+              place: params.get('place') ?? '',
               address: params.get('address') ?? '',
+              fullName: params.get('fullName') ?? '',
+              specialty: params.get('specialty') ?? '',
+              phone: params.get('phone') ?? '',
             }
           : undefined
       }
     />
   );
+}
+
+/** Открыли из плана: ЛПУ, а если в плане вписан врач — и он. */
+interface FromPlan {
+  place: string;
+  address: string;
+  fullName?: string;
+  specialty?: string;
+  phone?: string;
 }
 
 interface FormValues {
@@ -124,7 +136,7 @@ function initialValues(
   kind: VisitKind,
   visit: LocalVisit | undefined,
   dayVisits: LocalVisit[],
-  fromPlan: { place: string; address: string } | undefined,
+  fromPlan: FromPlan | undefined,
 ): FormValues {
   if (visit) {
     return {
@@ -143,16 +155,17 @@ function initialValues(
     };
   }
   // ЛПУ «залипает»: врачей обходят по несколько в одной поликлинике подряд.
-  // Открыли из плана — ЛПУ из плана, буква в букву (чтобы лечь в его строки).
+  // Открыли из плана — ЛПУ (и врач, если вписан) из плана, буква в букву,
+  // чтобы лечь в его строки.
   const last = dayVisits.filter((v) => v.kind === kind && v.placeName).at(-1);
   const sticky = kind === 'DOCTOR' ? last : undefined;
   return {
     kind,
-    fullName: '',
-    placeName: fromPlan?.place ?? sticky?.placeName ?? '',
-    address: fromPlan ? fromPlan.address : (sticky?.address ?? ''),
-    specialty: '',
-    phone: '',
+    fullName: fromPlan?.fullName ?? '',
+    placeName: fromPlan?.place || (sticky?.placeName ?? ''),
+    address: fromPlan?.place ? fromPlan.address : (sticky?.address ?? ''),
+    specialty: fromPlan?.specialty ?? '',
+    phone: fromPlan?.phone ?? '',
     products: [],
     comment: '',
     agreement: '',
@@ -173,7 +186,7 @@ function VisitForm({
   initialKind: VisitKind;
   visit?: LocalVisit;
   dayVisits: LocalVisit[];
-  fromPlan?: { place: string; address: string };
+  fromPlan?: FromPlan;
 }) {
   const navigate = useNavigate();
   const save = useSaveVisit();
@@ -250,6 +263,33 @@ function VisitForm({
       }
     }
   };
+
+  // врач из плана: договорённость и потенциал — из справочника, если он там
+  // есть под тем же ФИО; пустые специальность/телефон — оттуда же
+  useEffect(() => {
+    const name = fromPlan?.fullName?.trim();
+    if (visit || !name || initialKind !== 'DOCTOR') return;
+    let cancelled = false;
+    const key = (s: string) =>
+      s.toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
+    void searchContacts(userId, name).then((list) => {
+      const c = list.find((x) => key(x.fullName) === key(name));
+      if (cancelled || !c) return;
+      const cur = form.getValues();
+      form.setValues({
+        specialty: cur.specialty || (c.specialty ?? ''),
+        phone: cur.phone || (c.phone ?? ''),
+      });
+      carryAgreement(c.lastAgreement, c.lastAgreementDate, 'contact');
+      if (!form.getValues().potential && c.potential) {
+        form.setFieldValue('potential', c.potential);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
 
   /** быстрый ответ: в пустое поле — как есть, в заполненное — через запятую */
   const addTo = (field: 'fact' | 'deviation', phrase: string) => {
