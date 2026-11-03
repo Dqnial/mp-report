@@ -45,6 +45,7 @@ import type {
   DirectoryEntry,
   BaseUploaded,
   DayPlan,
+  PlannedDoctor,
   DayPreview,
   ReportFile,
   ImportCounts,
@@ -260,6 +261,64 @@ export function usePlan(date: string) {
     },
     enabled: !!uid,
     placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * Убрать врача из плана дня: в плане его не видно, в отчёте его строка пустая.
+ * С экрана исчезает сразу, не дожидаясь сервера.
+ */
+export function useDismissPlanned(date: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (d: PlannedDoctor) =>
+      api.post('/plan/dismissals', { date, fullName: d.fullName }),
+    onMutate: async (d) => {
+      await qc.cancelQueries({ queryKey: keys.plan(date) });
+      const before = qc.getQueryData<DayPlan>(keys.plan(date));
+      if (before) {
+        const place =
+          before.groups.find((g) => g.doctors?.some((x) => x.row === d.row))
+            ?.place ?? '';
+        qc.setQueryData<DayPlan>(keys.plan(date), {
+          ...before,
+          groups: before.groups.map((g) => ({
+            ...g,
+            doctors: g.doctors?.filter((x) => x.row !== d.row),
+          })),
+          dismissed: [
+            ...(before.dismissed ?? []),
+            {
+              fullName: d.fullName,
+              specialty: d.specialty,
+              phone: d.phone,
+              place,
+            },
+          ],
+        });
+      }
+      return { before };
+    },
+    onError: (_e, _d, ctx) => {
+      if (ctx?.before) qc.setQueryData(keys.plan(date), ctx.before);
+    },
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: keys.plan(date) });
+      void qc.invalidateQueries({ queryKey: keys.report(date.slice(0, 7)) });
+    },
+  });
+}
+
+/** Вернуть врача в план дня. */
+export function useRestorePlanned(date: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (fullName: string) =>
+      api.delete(`/plan/dismissals?${new URLSearchParams({ date, fullName })}`),
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: keys.plan(date) });
+      void qc.invalidateQueries({ queryKey: keys.report(date.slice(0, 7)) });
+    },
   });
 }
 

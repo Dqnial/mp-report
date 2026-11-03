@@ -85,6 +85,8 @@ export interface Slot {
   free: boolean;
   /** строка плана с врачом: её занимает только визит к нему */
   planned?: PlannedPerson;
+  /** врача из этой строки убрали из плана: строка свободна, G–I в отчёте пустые */
+  dismissed?: boolean;
   /** своё E этой строки (непусто — строка-заголовок группы) */
   plannedPlace: string;
   plannedAddress: string;
@@ -108,6 +110,45 @@ export interface DayBlock {
   firstRow: number;
   lastRow: number;
   slots: Slot[];
+}
+
+/** Врач, убранный из плана дня (см. PlanDismissal в схеме). */
+export interface Dismissal {
+  date: string; // YYYY-MM-DD
+  fullName: string;
+}
+
+/**
+ * Убрать из плана дней врачей, которых медпред убрал: строка становится
+ * обычной свободной. Сравнение ФИО — без учёта регистра, «ё» и пробелов.
+ */
+export function dismissPlanned(
+  days: Iterable<DayBlock>,
+  dismissed: Dismissal[],
+) {
+  const removed: (PlannedPerson & {
+    date: string;
+    row: number;
+    place: string;
+  })[] = [];
+  if (!dismissed.length) return removed;
+  const key = (date: string, name: string) => `${date}|${normName(name)}`;
+  const gone = new Set(dismissed.map((d) => key(d.date, d.fullName)));
+  for (const day of days) {
+    for (const s of day.slots) {
+      if (s.planned && gone.has(key(day.date, s.planned.fullName))) {
+        removed.push({
+          ...s.planned,
+          date: day.date,
+          row: s.row,
+          place: s.groupPlace,
+        });
+        delete s.planned;
+        s.dismissed = true;
+      }
+    }
+  }
+  return removed;
 }
 
 export interface TemplateInfo {
@@ -807,13 +848,31 @@ function applyFileEdits(
   }
 }
 
+/**
+ * Строки убранных врачей: ФИО/специальность/телефон врача стираем. Лёг туда
+ * другой визит — пишется своё, а чего в визите нет, не остаётся от убранного.
+ */
+function clearDismissed(
+  day: DayBlock,
+  edits: Map<number, Map<string, string>>,
+) {
+  for (const s of day.slots) {
+    if (!s.dismissed) continue;
+    const put = edits.get(s.row) ?? new Map<string, string>();
+    for (const c of PERSON_COLS) if (!put.has(c)) put.set(c, '');
+    edits.set(s.row, put);
+  }
+}
+
 async function planFill(
   file: Buffer,
   visits: VisitCells[],
   fileEdits: FileRowEdit[] = [],
+  dismissed: Dismissal[] = [],
 ): Promise<FillPlan> {
   const sheet = await loadVisitSheet(file);
   const days = new Map(findDays(sheet.rows, sheet.xml).map((d) => [d.date, d]));
+  dismissPlanned(days.values(), dismissed);
   const rowsByNum = new Map(sheet.rows.map((r) => [r.r, r]));
   const canInsert = await canInsertRows(sheet);
 
@@ -910,7 +969,15 @@ async function planFill(
         `${fmt(date)}: визитов больше, чем строк в шаблоне — добавил строк в конце дня: ${extra}`,
       );
     }
+    clearDismissed(block, edits);
     dayEdits.push({ day, edits, ids });
+  }
+  // убранные врачи в днях без визитов — тоже стереть из строк
+  for (const day of days.values()) {
+    if (byDay.has(day.date)) continue;
+    const edits = new Map<number, Map<string, string>>();
+    clearDismissed(day, edits);
+    if (edits.size) dayEdits.push({ day, edits, ids: new Map() });
   }
 
   for (const [date, n] of overflow) {
@@ -942,11 +1009,13 @@ export async function fillTemplate(
   file: Buffer,
   visits: VisitCells[],
   fileEdits: FileRowEdit[] = [],
+  dismissed: Dismissal[] = [],
 ): Promise<FillResult> {
   const { sheet, insertions, finalEdits, warnings, placed } = await planFill(
     file,
     visits,
     fileEdits,
+    dismissed,
   );
 
   // каждая колонка правится один раз, так что исходная разметка остальных
@@ -1048,9 +1117,10 @@ export async function previewDay(
   visits: VisitCells[],
   date: string,
   fileEdits: FileRowEdit[] = [],
+  dismissed: Dismissal[] = [],
 ): Promise<DayPreview> {
   const { sheet, days, insertions, finalEdits, rowVisit, warnings } =
-    await planFill(file, visits, fileEdits);
+    await planFill(file, visits, fileEdits, dismissed);
   const dayWarnings = warnings.filter((w) => w.startsWith(`${fmt(date)}:`));
   const day = days.get(date);
   if (!day) {

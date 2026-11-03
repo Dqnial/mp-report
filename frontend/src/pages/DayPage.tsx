@@ -4,6 +4,7 @@ import {
   Badge,
   Button,
   Collapse,
+  Drawer,
   Group,
   Loader,
   Paper,
@@ -14,6 +15,7 @@ import {
   UnstyledButton,
 } from '@mantine/core';
 import { useLocalStorage } from '@mantine/hooks';
+import { notifications } from '@mantine/notifications';
 import {
   IconAlertTriangle,
   IconArrowBackUp,
@@ -23,15 +25,23 @@ import {
   IconChevronLeft,
   IconChevronRight,
   IconChevronUp,
+  IconDotsVertical,
   IconPlus,
   IconSearch,
   IconStethoscope,
+  IconTrash,
   IconUser,
 } from '@tabler/icons-react';
 import { useEffect, useState, type CSSProperties } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useDayVisits, usePlan, useSyncStatus } from '../api/queries';
-import type { PlanGroup, PlannedDoctor } from '../api/types';
+import {
+  useDayVisits,
+  useDismissPlanned,
+  usePlan,
+  useRestorePlanned,
+  useSyncStatus,
+} from '../api/queries';
+import type { DismissedDoctor, PlanGroup, PlannedDoctor } from '../api/types';
 import { DockActions } from '../components/Layout';
 import { SyncBadge, SyncIcon } from '../components/SyncBadge';
 import { VisitCard } from '../components/VisitCard';
@@ -225,13 +235,18 @@ const newVisitUrl = (date: string, g: PlanGroup, d?: PlannedDoctor) => {
  */
 function PlanBlock({ date }: { date: string }) {
   const plan = usePlan(date);
+  // для какого врача из плана открыто меню «визит / убрать»
+  const [menuFor, setMenuFor] = useState<{
+    doctor: PlannedDoctor;
+    group: PlanGroup;
+  } | null>(null);
   // свёрнут ли план — помним на телефоне (список визитов важнее)
   const [open, setOpen] = useLocalStorage({
     key: 'plan-open',
     defaultValue: true,
   });
   if (!plan.data) return null;
-  const { hasTemplate, inTemplate, groups, stale } = plan.data;
+  const { hasTemplate, inTemplate, groups, stale, dismissed = [] } = plan.data;
 
   if (!hasTemplate) {
     return (
@@ -351,13 +366,20 @@ function PlanBlock({ date }: { date: string }) {
                     doctor={d}
                     color={color}
                     to={newVisitUrl(date, g, d)}
+                    onMenu={() => setMenuFor({ doctor: d, group: g })}
                   />
                 ))}
               </div>
             );
           })}
+          <DismissedList date={date} doctors={dismissed} />
         </Stack>
       </Collapse>
+      <PlannedDoctorSheet
+        date={date}
+        target={menuFor}
+        onClose={() => setMenuFor(null)}
+      />
     </Paper>
   );
 }
@@ -370,14 +392,16 @@ function PlannedDoctorRow({
   doctor: d,
   color,
   to,
+  onMenu,
 }: {
   doctor: PlannedDoctor;
   color: string;
   to: string;
+  onMenu: () => void;
 }) {
   const sub = [d.specialty, d.phone].filter(Boolean).join(' · ');
-  const body = (
-    <Group wrap="nowrap" gap="xs" className={classes.planDoctorCard}>
+  const person = (
+    <>
       <ThemeIcon
         size="md"
         radius="xl"
@@ -402,31 +426,232 @@ function PlannedDoctorRow({
           </Text>
         )}
       </Stack>
-      {!d.visited && (
-        <ThemeIcon
-          size="lg"
-          radius="md"
-          variant="light"
-          color={color}
-          style={{ flexShrink: 0 }}
-        >
-          <IconPlus size={20} />
-        </ThemeIcon>
-      )}
-    </Group>
+    </>
   );
-  return d.visited ? (
-    <div className={classes.planDoctor} aria-label={`Был: ${d.fullName}`}>
-      {body}
+  if (d.visited) {
+    return (
+      <div className={classes.planDoctor} aria-label={`Был: ${d.fullName}`}>
+        <Group wrap="nowrap" gap="xs" className={classes.planDoctorCard}>
+          {person}
+        </Group>
+      </div>
+    );
+  }
+  return (
+    <div className={classes.planDoctor}>
+      <Group wrap="nowrap" gap={4} className={classes.planDoctorCard}>
+        {/* вся карточка — визит к нему; «⋮» — визит или убрать из плана */}
+        <UnstyledButton
+          component={Link}
+          to={to}
+          className={classes.planDoctorLink}
+          aria-label={`Визит к врачу: ${d.fullName}`}
+        >
+          {person}
+          <ThemeIcon
+            size="lg"
+            radius="md"
+            variant="light"
+            color={color}
+            style={{ flexShrink: 0 }}
+          >
+            <IconPlus size={20} />
+          </ThemeIcon>
+        </UnstyledButton>
+        <ActionIcon
+          size={40}
+          variant="subtle"
+          color="gray"
+          radius="md"
+          onClick={onMenu}
+          style={{ flexShrink: 0 }}
+          aria-label={`Ещё: ${d.fullName}`}
+        >
+          <IconDotsVertical size={22} />
+        </ActionIcon>
+      </Group>
     </div>
-  ) : (
-    <UnstyledButton
-      component={Link}
-      to={to}
-      className={classes.planDoctor}
-      aria-label={`Визит к врачу: ${d.fullName}`}
+  );
+}
+
+/**
+ * Меню врача из плана — снизу экрана, под большой палец: визит к нему или
+ * убрать из плана. Убрать — только со вторым нажатием («Да, убрать»).
+ */
+function PlannedDoctorSheet({
+  date,
+  target,
+  onClose,
+}: {
+  date: string;
+  target: { doctor: PlannedDoctor; group: PlanGroup } | null;
+  onClose: () => void;
+}) {
+  const [confirm, setConfirm] = useState(false);
+  const dismiss = useDismissPlanned(date);
+  const restore = useRestorePlanned(date);
+  // закрыли — в следующий раз снова с первого шага
+  useEffect(() => {
+    if (!target) setConfirm(false);
+  }, [target]);
+  const d = target?.doctor;
+  const sub = d ? [d.specialty, d.phone].filter(Boolean).join(' · ') : '';
+
+  const remove = () => {
+    if (!d) return;
+    const name = d.fullName;
+    onClose();
+    dismiss.mutate(d, {
+      onSuccess: () => {
+        const id = `dismissed-${date}-${name}`;
+        notifications.show({
+          id,
+          color: 'gray',
+          autoClose: 6000,
+          message: (
+            <Group justify="space-between" wrap="nowrap" gap="xs">
+              <Text size="sm">Убран из плана: {name}</Text>
+              <Button
+                size="compact-sm"
+                variant="light"
+                style={{ flexShrink: 0 }}
+                onClick={() => {
+                  notifications.hide(id);
+                  restore.mutate(name);
+                }}
+              >
+                Вернуть
+              </Button>
+            </Group>
+          ),
+        });
+      },
+      onError: () =>
+        notifications.show({
+          color: 'red',
+          message: `Не удалось убрать ${name} — нет связи с сервером. Попробуйте ещё раз.`,
+        }),
+    });
+  };
+
+  return (
+    <Drawer
+      opened={!!target}
+      onClose={onClose}
+      position="bottom"
+      radius="lg"
+      withCloseButton={false}
+      // по высоте содержимого, а не на весь экран
+      styles={{ content: { height: 'auto', maxHeight: '90dvh' } }}
     >
-      {body}
-    </UnstyledButton>
+      {d && target && (
+        <Stack gap="md" pb="sm">
+          <div>
+            <Text fw={700} size="lg" style={{ overflowWrap: 'anywhere' }}>
+              {d.fullName}
+            </Text>
+            <Text size="sm" c="dimmed" style={{ overflowWrap: 'anywhere' }}>
+              {[sub, target.group.place].filter(Boolean).join(' · ')}
+            </Text>
+          </div>
+          {confirm ? (
+            <>
+              <Text>
+                Убрать из плана этого дня ({formatDay(date)})? Его не будет в
+                плане, а его строка в отчёте останется пустой.
+              </Text>
+              <Text size="sm" c="dimmed">
+                Вернуть можно внизу плана — «Убрано из плана».
+              </Text>
+              <Button
+                size="lg"
+                color="red"
+                leftSection={<IconTrash size={20} />}
+                onClick={remove}
+              >
+                Да, убрать
+              </Button>
+              <Button size="lg" variant="default" onClick={onClose}>
+                Отмена
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button
+                size="lg"
+                component={Link}
+                to={newVisitUrl(date, target.group, d)}
+                leftSection={<IconPlus size={20} />}
+              >
+                Добавить визит
+              </Button>
+              <Button
+                size="lg"
+                variant="light"
+                color="red"
+                leftSection={<IconTrash size={20} />}
+                onClick={() => setConfirm(true)}
+              >
+                Убрать из плана
+              </Button>
+              <Button size="lg" variant="subtle" color="gray" onClick={onClose}>
+                Закрыть
+              </Button>
+            </>
+          )}
+        </Stack>
+      )}
+    </Drawer>
+  );
+}
+
+/** Убранные из плана дня — свёрнутым списком внизу, чтобы вернуть. */
+function DismissedList({
+  date,
+  doctors,
+}: {
+  date: string;
+  doctors: DismissedDoctor[];
+}) {
+  const [open, setOpen] = useState(false);
+  const restore = useRestorePlanned(date);
+  if (!doctors.length) return null;
+  return (
+    <div className={classes.dismissed}>
+      <UnstyledButton w="100%" onClick={() => setOpen(!open)} py={6} px={4}>
+        <Group justify="space-between" wrap="nowrap">
+          <Text size="sm" c="dimmed">
+            Убрано из плана: {doctors.length}
+          </Text>
+          {open ? <IconChevronUp size={18} /> : <IconChevronDown size={18} />}
+        </Group>
+      </UnstyledButton>
+      <Collapse expanded={open}>
+        <Stack gap={4} pb={4}>
+          {doctors.map((d) => (
+            <Group key={d.fullName} wrap="nowrap" gap="xs" px={4}>
+              <Stack gap={0} style={{ flex: 1, minWidth: 0 }}>
+                <Text size="sm" c="dimmed" style={{ overflowWrap: 'anywhere' }}>
+                  {d.fullName}
+                </Text>
+                <Text size="xs" c="dimmed" style={{ overflowWrap: 'anywhere' }}>
+                  {[d.specialty, d.place].filter(Boolean).join(' · ')}
+                </Text>
+              </Stack>
+              <Button
+                variant="light"
+                size="sm"
+                leftSection={<IconArrowBackUp size={16} />}
+                loading={restore.isPending && restore.variables === d.fullName}
+                onClick={() => restore.mutate(d.fullName)}
+                aria-label={`Вернуть в план: ${d.fullName}`}
+              >
+                Вернуть
+              </Button>
+            </Group>
+          ))}
+        </Stack>
+      </Collapse>
+    </div>
   );
 }

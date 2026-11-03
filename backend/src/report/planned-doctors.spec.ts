@@ -1,6 +1,7 @@
 import JSZip from 'jszip';
 import {
   analyzeTemplate,
+  dismissPlanned,
   fillTemplate,
   placeDay,
   previewDay,
@@ -220,6 +221,79 @@ describe('план с врачами', () => {
       4: 'empty',
       5: 'plan',
       6: 'file',
+    });
+  });
+
+  describe('врача убрали из плана', () => {
+    // ФИО в записи — другим регистром и с лишним пробелом: сравнение их не замечает
+    const gone = [{ date: '2026-10-01', fullName: ' сидорова  мария' }];
+
+    it('в плане дня его нет, строка свободна для любого визита', async () => {
+      const [day] = (await analyzeTemplate(await template())).days;
+      const removed = dismissPlanned([day], gone);
+      expect(removed).toEqual([
+        {
+          date: '2026-10-01',
+          row: 3,
+          place: 'ГП 1',
+          fullName: 'Сидорова Мария',
+          specialty: '',
+          phone: '87005556677',
+        },
+      ]);
+      const { placements, groups } = placeDay(day, [
+        visit('Иванов Пётр'),
+        visit('Смирнов Олег'),
+      ]);
+      expect(groups[0].doctors.map((d) => d.row)).toEqual([2]);
+      expect(placements.map((p) => p?.row)).toEqual([3, 4]);
+    });
+
+    it('другие дни не трогает', async () => {
+      const [day] = (await analyzeTemplate(await template())).days;
+      expect(
+        dismissPlanned(
+          [day],
+          [{ date: '2026-10-02', fullName: 'Сидорова Мария' }],
+        ),
+      ).toEqual([]);
+      expect(day.slots.find((s) => s.row === 3)!.planned).toBeDefined();
+    });
+
+    it('в отчёте его строка пустая — и когда визитов за день нет', async () => {
+      const at = await sheet(
+        (await fillTemplate(await template(), [], [], gone)).file,
+      );
+      expect([at('G3'), at('I3')]).toEqual(['', '']);
+      expect(at('G2')).toBe('Петрова Анна Ивановна'); // остальные — как в плане
+    });
+
+    it('лёг другой визит — его данные, от убранного ничего не остаётся', async () => {
+      const res = await fillTemplate(
+        await template(),
+        [visit('Петрова Анна Ивановна'), visit('Иванов Пётр')],
+        [],
+        gone,
+      );
+      const at = await sheet(res.file);
+      expect([at('G3'), at('I3'), at('J3')]).toEqual([
+        'Иванов Пётр',
+        '',
+        'Коф Йог',
+      ]);
+    });
+
+    it('предпросмотр: строка пустая', async () => {
+      const day = await previewDay(
+        await template(),
+        [],
+        '2026-10-01',
+        [],
+        gone,
+      );
+      const row = day.rows.find((r) => r.row === 3)!;
+      expect(row.source).toBe('empty');
+      expect(row.cells.G).toBe('');
     });
   });
 });

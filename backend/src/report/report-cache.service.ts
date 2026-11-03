@@ -23,7 +23,7 @@ const TTL_SEC = 24 * 3_600;
  * Инвалидация — через версию в ключе, а не удалением: версия складывается из
  * всего, от чего зависит файл, — загрузки шаблона, числа визитов месяца и
  * времени последней правки (в т.ч. удаления — оно мягкое и тоже меняет
- * updatedAt), и сборки бэкенда (новая логика раскладки → новый ключ). Любое
+ * updatedAt), врачей, убранных из плана, и сборки бэкенда (новая логика раскладки → новый ключ). Любое
  * изменение даёт новый ключ, старый просто истекает: устаревший отчёт отдать
  * нельзя, а забыть «сбросить кеш» в каком-то месте кода — тоже.
  *
@@ -55,11 +55,22 @@ export class ReportCacheService {
       _count: { _all: true },
       _max: { updatedAt: true },
     });
+    // убранные из плана врачи: набор записей (их мало), а не число — убрал
+    // одного и вернул другого — уже другой файл
+    const dismissed = await this.prisma.planDismissal.findMany({
+      where: { userId, date: { gte: from, lt: to } },
+      select: { id: true },
+      orderBy: { id: 'asc' },
+    });
     const version = [
       template.id,
       template.createdAt.getTime(),
       visits._count._all,
       visits._max.updatedAt?.getTime() ?? 0,
+      createHash('sha256')
+        .update(dismissed.map((d) => d.id).join(','))
+        .digest('hex')
+        .slice(0, 12),
       process.env.APP_BUILD ?? 'dev',
     ].join(':');
     return {

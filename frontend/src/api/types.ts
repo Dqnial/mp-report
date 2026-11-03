@@ -186,6 +186,16 @@ export interface DayPlan {
   /** есть ли этот день в шаблоне (выходных там нет) */
   inTemplate: boolean;
   groups: PlanGroup[];
+  /** врачи, убранные из плана дня (их можно вернуть); в старом кэше нет */
+  dismissed?: DismissedDoctor[];
+}
+
+export interface DismissedDoctor {
+  fullName: string;
+  specialty: string;
+  phone: string;
+  /** ЛПУ из плана, где он был */
+  place: string;
 }
 
 /** Строка экрана «Справочник»: врач/провизор или аптека без провизора. */

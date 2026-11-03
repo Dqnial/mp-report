@@ -23,6 +23,7 @@ model User {
   places         Place[]
   contacts       Contact[]
   visits         Visit[]
+  planDismissals PlanDismissal[]
 
   @@map("users")
 }
@@ -73,6 +74,23 @@ model Template {
 
   @@unique([userId, month])
   @@map("templates")
+}
+
+/// Врач из плана (ФИО в строке шаблона), которого медпред убрал из плана
+/// дня: в плане его не видно, в отчёте его строка пустая (свободная). По ФИО,
+/// а не по номеру строки — переживает повторную загрузку шаблона.
+model PlanDismissal {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  date      DateTime @db.Date
+  /// ФИО как в шаблоне; сравнивается без учёта регистра, «ё» и пробелов
+  fullName  String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date, fullName])
+  @@map("plan_dismissals")
 }
 
 /// Файл «База врачей и аптек» от руководителя — один на пользователя.
