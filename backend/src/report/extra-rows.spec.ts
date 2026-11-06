@@ -140,7 +140,8 @@ describe('визитов больше, чем строк', () => {
     const nums = [...sheet.matchAll(/<row r="(\d+)"/g)].map((m) =>
       Number(m[1]),
     );
-    expect(nums).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    // в 02.10 один визит: день сжался до одной строки
+    expect(nums).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     // все шесть врачей по порядку в 2–7, последняя строка с границей — 7
     expect([2, 3, 4, 5, 6, 7].map((r) => text(sheet, `G${r}`))).toEqual(
       [1, 2, 3, 4, 5, 6].map((i) => `Врач ${i}`),
@@ -157,11 +158,13 @@ describe('визитов больше, чем строк', () => {
     expect(text(sheet, 'G8')).toBe('Врач завтра');
     // ссылки: объединения дня недели, размеры, фильтр, выделение, имена
     expect(sheet).toContain('<mergeCell ref="A2:A7"/>');
-    expect(sheet).toContain('<mergeCell ref="A8:A11"/>');
-    expect(sheet).toContain('<dimension ref="A1:N11"/>');
-    expect(sheet).toContain('<autoFilter ref="A1:N11"/>');
-    expect(sheet).toContain('activeCell="G11" sqref="G11"');
-    expect(wb).toContain(`&apos;${SHEET}&apos;!$A$1:$N$22`);
+    // объединения из одной ячейки Excel считает ошибкой файла
+    expect(sheet).not.toContain('A8:A8');
+    expect(sheet).toContain('<mergeCells count="1">');
+    expect(sheet).toContain('<dimension ref="A1:N8"/>');
+    expect(sheet).toContain('<autoFilter ref="A1:N8"/>');
+    expect(sheet).toContain('activeCell="G8" sqref="G8"');
+    expect(wb).toContain(`&apos;${SHEET}&apos;!$A$1:$N$19`);
     expect(wb).toContain('&apos;Другой&apos;!$A$1:$A$9'); // чужой лист не трогаем
 
     // загруженный обратно отчёт читается: 7 визитов, даты верные
@@ -177,14 +180,31 @@ describe('визитов больше, чем строк', () => {
     ).toBe(true);
   });
 
-  it('влезло — файл не меняется ни на строку', async () => {
-    const res = await fillTemplate(await template(), [
-      visit('2026-10-01', 'ГП 1', 'Один'),
-    ]);
+  it('день заполнен ровно — сетка та же; день без визитов не трогаем', async () => {
+    const res = await fillTemplate(
+      await template(),
+      [1, 2, 3, 4].map((i) => visit('2026-10-01', 'ГП 1', `Врач ${i}`)),
+    );
     expect(res.warnings).toEqual([]);
     const { sheet } = await sheetXml(res.file);
     expect(sheet).toContain('<mergeCell ref="A2:A5"/>');
+    expect(sheet).toContain('<mergeCell ref="A6:A9"/>');
     expect(sheet).toContain('<dimension ref="A1:N9"/>');
+  });
+
+  it('строки без визитов удаляются: визиты подряд, последняя строка дня с границей', async () => {
+    const res = await fillTemplate(await template(), [
+      visit('2026-10-01', 'ГП 1', 'Один'),
+      visit('2026-10-01', 'ГП 1', 'Два'),
+    ]);
+    const { sheet } = await sheetXml(res.file);
+    expect(text(sheet, 'D2')).toBe('01.10.2026');
+    expect([text(sheet, 'G2'), text(sheet, 'G3')]).toEqual(['Один', 'Два']);
+    expect(rowXml(sheet, 3)).toContain('s="9"'); // жирная граница дня
+    expect(text(sheet, 'D4')).toBe('02.10.2026'); // следующий день сразу за ним
+    expect(sheet).toContain('<mergeCell ref="A2:A3"/>');
+    expect(sheet).toContain('<mergeCell ref="A4:A7"/>');
+    expect(res.warnings).toEqual([]);
   });
 
   it('ЛПУ не по плану в добавленной строке — записанной последней строке дня подписываем её ЛПУ', async () => {
@@ -367,21 +387,24 @@ describe('строки плана, куда не сходили', () => {
     expect(res.warnings).toEqual([]); // строк не добавляли
     const { sheet } = await sheetXml(res.file);
 
-    expect(text(sheet, 'G7')).toBe('Провизор 1');
-    expect(text(sheet, 'E7')).toBe('Фармленд'); // план не тронут
+    // куда не сходили и некого вписать («Фармленд» на Лесной) — строки нет,
+    // визиты дня подряд с первой строки
+    expect(text(sheet, 'D6')).toBe('02.10.2026');
+    expect(text(sheet, 'G6')).toBe('Провизор 1');
+    expect([text(sheet, 'E6'), text(sheet, 'F6')]).toEqual([
+      'Фармленд',
+      'Садовая 46',
+    ]);
+    // визит без адреса — адрес плана чужой, стираем (стиль ячейки остаётся)
+    expect(text(sheet, 'E7')).toBe('Без адреса');
+    expect(sheet).toContain('<c r="F7" s="3"/>');
     // «Европа» — в последнюю нетронутую строку плана (Биосфера), план заменён
     expect([
-      text(sheet, 'E9'),
-      text(sheet, 'F9'),
-      text(sheet, 'C9'),
-      text(sheet, 'G9'),
+      text(sheet, 'E8'),
+      text(sheet, 'F8'),
+      text(sheet, 'C8'),
+      text(sheet, 'G8'),
     ]).toEqual(['Европа', 'Полевая 3', 'Аптека', 'Провизор 2']);
-    // визит без адреса — адрес плана чужой, стираем (стиль ячейки остаётся)
-    expect(text(sheet, 'E8')).toBe('Без адреса');
-    expect(sheet).toContain('<c r="F8" s="3"/>');
-    // куда не сходили и некого вписать — план остаётся
-    expect(text(sheet, 'E6')).toBe('Фармленд');
-    expect(text(sheet, 'G6')).toBeUndefined();
   });
 
   it('визитов больше, чем строк плана, — строки добавляем только после этого', async () => {

@@ -92,9 +92,11 @@ describe('исправленные визиты «из файла»', () => {
     expect(at('J3')).toBe('Лаксид');
   });
 
-  it('удалённый визит очищает строку, план в заголовке остаётся', async () => {
+  it('удалённый визит — строки нет, следующие поднимаются, план в заголовке остаётся', async () => {
     const at = await cells([{ row: 3, visit: null }]);
-    expect(['G3', 'H3', 'J3'].map(at)).toEqual(['', '', '']);
+    expect(at('G2')).toBe('Иванова');
+    expect(at('G3')).toBe('Сидорова');
+    expect(['H3', 'J3', 'G4'].map(at)).toEqual(['', '', '']);
     expect(at('E2')).toBe('ГП 1');
   });
 
@@ -111,7 +113,7 @@ describe('исправленные визиты «из файла»', () => {
     expect([at('E4'), at('F4')]).toEqual(['ГП 1', 'Лесная 1']);
   });
 
-  it('предпросмотр показывает правку как визит приложения, удалённый — пустой строкой', async () => {
+  it('предпросмотр показывает правку как визит приложения, удалённого нет', async () => {
     const file = await template();
     const fixedDay = await previewDay(file, [], '2026-10-01', [
       { row: 3, visit: edited(), keepProducts: true },
@@ -123,8 +125,8 @@ describe('исправленные визиты «из файла»', () => {
       visitId: 'tpl:row3',
       cells: { G: 'Петрова Анна' },
     });
-    expect(byRow.get(4)?.source).toBe('empty');
     expect(byRow.get(2)?.source).toBe('file');
+    expect(fixedDay.rows).toHaveLength(2);
   });
 
   it('свободные строки дня по-прежнему занимают новые визиты', async () => {

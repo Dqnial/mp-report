@@ -59,21 +59,6 @@
   background: var(--mantine-color-default-hover);
 }
 
-/* у не посещённого врача карточка — ссылка на визит, «⋮» — рядом */
-.planDoctorLink {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: var(--mantine-spacing-xs);
-  align-self: stretch;
-}
-
-.dismissed {
-  margin-top: 4px;
-  border-top: 1px solid var(--mantine-color-gray-2);
-}
-
 .planDoctor:last-child {
   padding-bottom: 8px;
 }

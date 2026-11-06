@@ -83,10 +83,11 @@ export interface Slot {
   numbered: boolean;
   /** визита в строке нет (J–N пусты); у запланированного врача — тоже free */
   free: boolean;
-  /** строка плана с врачом: её занимает только визит к нему */
+  /**
+   * строка плана с врачом: сначала её занимает визит к нему; не пришёл —
+   * может занять другой визит в это место. Нет визита — в отчёт не попадает
+   */
   planned?: PlannedPerson;
-  /** врача из этой строки убрали из плана: строка свободна, G–I в отчёте пустые */
-  dismissed?: boolean;
   /** своё E этой строки (непусто — строка-заголовок группы) */
   plannedPlace: string;
   plannedAddress: string;
@@ -110,45 +111,6 @@ export interface DayBlock {
   firstRow: number;
   lastRow: number;
   slots: Slot[];
-}
-
-/** Врач, убранный из плана дня (см. PlanDismissal в схеме). */
-export interface Dismissal {
-  date: string; // YYYY-MM-DD
-  fullName: string;
-}
-
-/**
- * Убрать из плана дней врачей, которых медпред убрал: строка становится
- * обычной свободной. Сравнение ФИО — без учёта регистра, «ё» и пробелов.
- */
-export function dismissPlanned(
-  days: Iterable<DayBlock>,
-  dismissed: Dismissal[],
-) {
-  const removed: (PlannedPerson & {
-    date: string;
-    row: number;
-    place: string;
-  })[] = [];
-  if (!dismissed.length) return removed;
-  const key = (date: string, name: string) => `${date}|${normName(name)}`;
-  const gone = new Set(dismissed.map((d) => key(d.date, d.fullName)));
-  for (const day of days) {
-    for (const s of day.slots) {
-      if (s.planned && gone.has(key(day.date, s.planned.fullName))) {
-        removed.push({
-          ...s.planned,
-          date: day.date,
-          row: s.row,
-          place: s.groupPlace,
-        });
-        delete s.planned;
-        s.dismissed = true;
-      }
-    }
-  }
-  return removed;
 }
 
 export interface TemplateInfo {
@@ -236,7 +198,8 @@ function findDays(rows: Row[], xml: string): DayBlock[] {
       const mergeEnd = merges.get(rows[i].r);
       block = mergeEnd
         ? block.filter((r) => r.r <= mergeEnd)
-        : block.slice(0, block.findLastIndex(isSlotNumber) + 1);
+        : // строка с датой есть всегда, даже если номеров нет (день из одной строки)
+          block.slice(0, Math.max(1, block.findLastIndex(isSlotNumber) + 1));
     }
 
     let groupPlace = '';
@@ -347,6 +310,8 @@ export interface Placement {
    * плана заменяем фактическими (так делают и вручную в Excel)
    */
   replacesPlan?: boolean;
+  /** визит именно к врачу этой строки плана (его данные можно не повторять) */
+  matched?: boolean;
 }
 
 /** Группа дня «ЛПУ + строки под ним» — для блока «По плану». */
@@ -373,7 +338,10 @@ export interface DayPlacement {
 
 /**
  * Раскладка визитов дня по строкам — по тому, как устроен план:
- * 1) визит в ЛПУ из плана — в первую свободную строку группы этого ЛПУ;
+ * 0) визит к врачу из плана — в его строку;
+ * 1) визит в ЛПУ из плана — в первую свободную строку группы этого ЛПУ,
+ *    а если таких нет — в строку врача, к которому визита нет (провизор
+ *    сменился, принял другой врач);
  * 2) ЛПУ нет в плане или его группа заполнена — визит открывает новую
  *    группу в свободном хвосте последней группы дня (запасные строки в
  *    конце дня): туда пишем ЛПУ и адрес, следующие визиты в это же место
@@ -402,6 +370,7 @@ export function placeDay(
     inFile: !!s.plannedPlace,
     newHead: false,
     replacesPlan: false,
+    matched: false,
     /** адрес группы, которую открывает эта строка */
     headAddress: s.plannedPlace ? s.plannedAddress : s.groupAddress,
   }));
@@ -414,7 +383,7 @@ export function placeDay(
     return [start, end];
   };
   const heads = () => rows.flatMap((r, i) => (r.head ? [i] : []));
-  /** строка для любого визита: пустая, не занятая и не за врачом из плана */
+  /** пустая строка: не занята и в плане на ней никого */
   const open = (r: (typeof rows)[number]) => r.free && !r.planned;
 
   // один телефон бывает на всю регистратуру — без ФИО он годится, а при
@@ -466,9 +435,11 @@ export function placeDay(
       }))
       .filter((c) => c.score > 0)
       .sort((a, b) => b.score - a.score);
-    for (const { h } of candidates) {
-      const [, end] = groupOf(h);
-      for (let i = h; i < end; i++) if (open(rows[i])) return i;
+    for (const test of [open, (r: (typeof rows)[number]) => r.free]) {
+      for (const { h } of candidates) {
+        const [, end] = groupOf(h);
+        for (let i = h; i < end; i++) if (test(rows[i])) return i;
+      }
     }
     return -1;
   };
@@ -500,8 +471,8 @@ export function placeDay(
     for (const h of heads().reverse()) {
       if (!rows[h].inFile || rows[h].newHead || rows[h].boundary) continue;
       const [, end] = groupOf(h);
-      // группу с врачами из плана не отдаём другому месту
-      if (rows.slice(h, end).every(open)) return h;
+      // врачи без визитов в отчёт не попадают — их строки тоже можно занять
+      if (rows.slice(h, end).every((r) => r.free)) return h;
     }
     return -1;
   };
@@ -511,8 +482,10 @@ export function placeDay(
     vi: number,
     i: number,
     open?: { place: string; address: string },
+    matched = false,
   ) => {
     rows[i].free = false;
+    rows[i].matched = matched;
     const replacesPlan = !!open && rows[i].inFile;
     if (open) {
       rows[i].head = true;
@@ -525,6 +498,7 @@ export function placeDay(
       row: rows[i].row,
       newHead: !!open,
       ...(replacesPlan && { replacesPlan }),
+      ...(matched && { matched }),
     };
   };
 
@@ -542,7 +516,7 @@ export function placeDay(
     )
     .sort((a, b) => b.score - a.score)
     .forEach(({ vi, i }) => {
-      if (!placements[vi] && rows[i].free) take(vi, i);
+      if (!placements[vi] && rows[i].free) take(vi, i, undefined, true);
     });
   // 1) по плану
   visits.forEach((v, vi) => {
@@ -581,7 +555,7 @@ export function placeDay(
         used: members.filter((r) => !r.free).length,
         inFile: rows[h].inFile,
         doctors: members.flatMap((r) =>
-          r.planned ? [{ ...r.planned, row: r.row, visited: !r.free }] : [],
+          r.planned ? [{ ...r.planned, row: r.row, visited: r.matched }] : [],
         ),
       };
     });
@@ -612,7 +586,9 @@ export function expandDay(day: DayBlock, k: number): DayBlock {
   const moved: Slot = {
     ...last,
     row: last.row + k,
-    boundary: !last.plannedPlace && !last.free,
+    // и врач из плана: иначе добавленные строки — не хвост дня, визит не по
+    // плану не сможет открыть в них своё ЛПУ
+    boundary: !last.plannedPlace && (!last.free || !!last.planned),
   };
   return {
     ...day,
@@ -661,42 +637,60 @@ interface Insertion {
 const shiftRow = (r: number, ins: Insertion[]) =>
   r + ins.reduce((n, i) => (i.at <= r ? n + i.count : n), 0);
 
+type RowMap = (row: number) => number;
+
 /** A5, $A$5, A5:B9, $2:$4 — сдвигаем номера строк. */
-const shiftRef = (ref: string, ins: Insertion[]) =>
+const shiftRef = (ref: string, map: RowMap) =>
   ref
     .split(':')
     .map((part) =>
       part.replace(
         /^(\$?[A-Z]{0,3}\$?)(\d+)$/,
-        (_, c: string, r: string) => c + String(shiftRow(Number(r), ins)),
+        (_, c: string, r: string) => c + String(map(Number(r))),
       ),
     )
     .join(':');
 
 /** Ссылки в атрибутах вне строк листа: объединения, фильтр, выделение… */
-const shiftSheetRefs = (xml: string, ins: Insertion[]) =>
-  ins.length
+const shiftSheetRefs = (xml: string, map: RowMap, changed: boolean) =>
+  changed
     ? xml
         .replace(
           /\b(ref|sqref|topLeftCell|activeCell)="([^"]*)"/g,
           (_, name: string, v: string) =>
             `${name}="${v
               .split(' ')
-              .map((r) => shiftRef(r, ins))
+              .map((r) => shiftRef(r, map))
               .join(' ')}"`,
         )
         .replace(/<rowBreaks\b[\s\S]*?<\/rowBreaks>/, (b) =>
           b.replace(
             /(<brk\b[^>]*?\sid=")(\d+)"/g,
-            (_, p: string, r: string) => `${p}${shiftRow(Number(r), ins)}"`,
+            (_, p: string, r: string) => `${p}${map(Number(r))}"`,
           ),
         )
     : xml;
 
+/** День сжался до одной строки: объединение A5:A5 Excel считает ошибкой файла. */
+function dropSingleCellMerges(xml: string) {
+  let dropped = 0;
+  const out = xml.replace(/<mergeCell ref="([A-Z]+\d+):\1"\s*\/>/g, () => {
+    dropped++;
+    return '';
+  });
+  if (!dropped) return xml;
+  return out
+    .replace(/<mergeCells\b[^>]*>\s*<\/mergeCells>/, '')
+    .replace(
+      /(<mergeCells\b[^>]*?\scount=")(\d+)"/,
+      (_, p: string, n: string) => `${p}${Number(n) - dropped}"`,
+    );
+}
+
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** Именованные диапазоны книги, указывающие на лист визитов. */
-function shiftDefinedNames(wb: string, sheetName: string, ins: Insertion[]) {
+function shiftDefinedNames(wb: string, sheetName: string, map: RowMap) {
   const name = escapeRe(escapeXml(sheetName));
   const re = new RegExp(
     `((?:&apos;|')?${name}(?:&apos;|')?!)(\\$?[A-Z]{0,3}\\$?\\d+(?::\\$?[A-Z]{0,3}\\$?\\d+)?)`,
@@ -708,7 +702,7 @@ function shiftDefinedNames(wb: string, sheetName: string, ins: Insertion[]) {
       open +
       text.replace(
         re,
-        (__, pre: string, ref: string) => pre + shiftRef(ref, ins),
+        (__, pre: string, ref: string) => pre + shiftRef(ref, map),
       ) +
       close,
   );
@@ -760,6 +754,8 @@ interface FillPlan {
   sheet: LoadedSheet;
   days: Map<string, DayBlock>;
   insertions: Insertion[];
+  /** строки без визита, которые не попадут в файл (номера после вставок) */
+  removed: Set<number>;
   /** итоговый номер строки → колонка → значение */
   finalEdits: Map<number, Map<string, string>>;
   /** итоговый номер строки → id визита */
@@ -848,31 +844,144 @@ function applyFileEdits(
   }
 }
 
+/** Номер строки после вставок → итоговый; удалённая — как предыдущая оставшаяся. */
+const afterRemoval = (r: number, removed: Set<number>) => {
+  let n = r;
+  for (const x of removed) if (x <= r) n--;
+  return n;
+};
+
 /**
- * Строки убранных врачей: ФИО/специальность/телефон врача стираем. Лёг туда
- * другой визит — пишется своё, а чего в визите нет, не остаётся от убранного.
+ * В отчёт попадают только строки с визитами: есть в плане, но визита нет — строки
+ * нет. Визиты дня идут подряд сверху вниз; сетка дня (первая строка с датой,
+ * объединённый день недели, последняя с жирной границей) остаётся на месте,
+ * лишние строки удаляем из её середины.
+ * В дне без единого визита строки остаются как план, но без ФИО. Нельзя менять
+ * число строк (см. canInsertRows) — только стираем ФИО, строки остаются пустыми.
  */
-function clearDismissed(
-  day: DayBlock,
+function compactDays(
+  days: Map<string, DayBlock>,
+  rowsByNum: Map<number, Row>,
+  insertions: Insertion[],
   edits: Map<number, Map<string, string>>,
+  rowVisit: Map<number, string>,
+  placedRows: Set<number>,
+  canRemove: boolean,
+  warnings: string[],
 ) {
-  for (const s of day.slots) {
-    if (!s.dismissed) continue;
-    const put = edits.get(s.row) ?? new Map<string, string>();
-    for (const c of PERSON_COLS) if (!put.has(c)) put.set(c, '');
-    edits.set(s.row, put);
+  const removed = new Set<number>();
+  const finalEdits = new Map<number, Map<string, string>>();
+  const finalVisit = new Map<number, string>();
+  const movedEdits = new Map<number, Map<string, string>>();
+  const movedVisit = new Map<number, string>();
+
+  for (const day of days.values()) {
+    const source = new Map(
+      day.slots.map((s) => [shiftRow(s.row, insertions), rowsByNum.get(s.row)]),
+    );
+    const entries: { r: number; src?: Row; put?: Map<string, string> }[] = [];
+    const last = shiftRow(day.lastRow, insertions);
+    for (let r = shiftRow(day.firstRow, insertions); r <= last; r++) {
+      entries.push({ r, src: source.get(r), put: edits.get(r) });
+    }
+    const val = (e: (typeof entries)[number], col: string) =>
+      e.put?.get(col) ?? e.src?.cells.get(col)?.value ?? '';
+    const isKept = (e: (typeof entries)[number]) =>
+      placedRows.has(e.r) ||
+      rowVisit.has(e.r) ||
+      DONE_COLS.some((c) => !!val(e, c));
+    const kept = entries.filter(isKept);
+
+    // ЛПУ строки, если его заголовок окажется удалён
+    if (kept.length && canRemove) {
+      let group = { place: '', address: '' };
+      let written = '';
+      for (const e of entries) {
+        const place = val(e, VISIT_COLS.placeName);
+        if (place) {
+          group = { place, address: val(e, VISIT_COLS.address) };
+        }
+        if (!isKept(e)) continue;
+        const key = `${group.place}|${group.address}`;
+        if (!place && group.place && key !== written) {
+          e.put = new Map(e.put);
+          e.put.set(VISIT_COLS.placeName, group.place);
+          if (!val(e, VISIT_COLS.address)) {
+            e.put.set(VISIT_COLS.address, group.address);
+          }
+        }
+        written = key;
+      }
+    }
+
+    if (!kept.length || !canRemove) {
+      for (const e of entries) {
+        const put = new Map(e.put);
+        if (!isKept(e)) {
+          for (const c of PERSON_COLS) if (val(e, c)) put.set(c, '');
+        }
+        if (put.size) movedEdits.set(e.r, put);
+        const id = rowVisit.get(e.r);
+        if (id) movedVisit.set(e.r, id);
+      }
+      continue;
+    }
+
+    const targets =
+      kept.length === 1
+        ? [entries[0]]
+        : [...entries.slice(0, kept.length - 1), entries[entries.length - 1]];
+    const numbered = day.slots.some((s) => s.numbered);
+    kept.forEach((from, i) => {
+      const to = targets[i];
+      const put = new Map<string, string>();
+      const cols = new Set([
+        ...(from.src?.cells.keys() ?? []),
+        ...(from.put?.keys() ?? []),
+        ...(to.src?.cells.keys() ?? []),
+      ]);
+      for (const col of cols) {
+        if (col === 'A' || col === 'B' || col === 'D') continue;
+        const value = val(from, col);
+        if (value !== (to.src?.cells.get(col)?.value ?? '')) {
+          put.set(col, value);
+        }
+      }
+      const num = String(i + 1);
+      if (numbered && (to.src?.cells.get('B')?.value ?? '') !== num) {
+        put.set('B', num);
+      }
+      if (put.size) movedEdits.set(to.r, put);
+      const id = rowVisit.get(from.r);
+      if (id) movedVisit.set(to.r, id);
+    });
+    const left = new Set(targets.map((t) => t.r));
+    for (const e of entries) if (!left.has(e.r)) removed.add(e.r);
+
+    const added = kept.length - day.slots.length;
+    if (added > 0) {
+      warnings.push(
+        `${fmt(day.date)}: визитов больше, чем строк в шаблоне — добавил строк в конце дня: ${added}`,
+      );
+    }
   }
+
+  for (const [r, put] of movedEdits) {
+    finalEdits.set(afterRemoval(r, removed), put);
+  }
+  for (const [r, id] of movedVisit) {
+    finalVisit.set(afterRemoval(r, removed), id);
+  }
+  return { removed, finalEdits, rowVisit: finalVisit };
 }
 
 async function planFill(
   file: Buffer,
   visits: VisitCells[],
   fileEdits: FileRowEdit[] = [],
-  dismissed: Dismissal[] = [],
 ): Promise<FillPlan> {
   const sheet = await loadVisitSheet(file);
   const days = new Map(findDays(sheet.rows, sheet.xml).map((d) => [d.date, d]));
-  dismissPlanned(days.values(), dismissed);
   const rowsByNum = new Map(sheet.rows.map((r) => [r.r, r]));
   const canInsert = await canInsertRows(sheet);
 
@@ -884,6 +993,7 @@ async function planFill(
     day: DayBlock;
     edits: Map<number, Map<string, string>>;
     ids: Map<number, string>;
+    placedRows: number[];
   }[] = [];
   let placed = 0;
 
@@ -906,6 +1016,7 @@ async function planFill(
     const slotByRow = new Map(block.slots.map((s) => [s.row, s]));
     const edits = new Map<number, Map<string, string>>();
     const ids = new Map<number, string>();
+    const placedRows: number[] = [];
     let headInExtra = false;
 
     dayVisits.forEach((v, vi) => {
@@ -933,11 +1044,9 @@ async function planFill(
       } else if (slot.plannedPlace && !slot.plannedAddress) {
         set(VISIT_COLS.address, v.address);
       }
-      // «Врач»/«Аптека» — в пустую C (в добавленных строках её нет совсем),
-      // а в занятой строке плана — по факту
-      if ((!slot.label || p.replacesPlan) && v.kind) {
-        set(VISIT_COLS.kind, KIND_LABEL[v.kind]);
-      }
+      // «Врач»/«Аптека» — по факту: в плане колонку заполняют как попало, и
+      // строку мог занять другой визит
+      if (v.kind) set(VISIT_COLS.kind, KIND_LABEL[v.kind]);
       set(VISIT_COLS.fullName, v.fullName);
       set(VISIT_COLS.specialty, v.specialty);
       set(VISIT_COLS.phone, v.phone);
@@ -945,7 +1054,12 @@ async function planFill(
         .slice(0, 4)
         .forEach((pr, i) => set(VISIT_COLS.products[i], pr));
       set(VISIT_COLS.comment, v.comment);
+      // в строке врача из плана лёг другой визит — от врача ничего не остаётся
+      if (slot.planned && !p.matched) {
+        for (const c of PERSON_COLS) if (!put.has(c)) put.set(c, '');
+      }
       edits.set(p.row, put);
+      placedRows.push(p.row);
       if (v.id) ids.set(p.row, v.id);
     });
 
@@ -965,19 +1079,8 @@ async function planFill(
         }
         edits.set(last.row, put);
       }
-      warnings.push(
-        `${fmt(date)}: визитов больше, чем строк в шаблоне — добавил строк в конце дня: ${extra}`,
-      );
     }
-    clearDismissed(block, edits);
-    dayEdits.push({ day, edits, ids });
-  }
-  // убранные врачи в днях без визитов — тоже стереть из строк
-  for (const day of days.values()) {
-    if (byDay.has(day.date)) continue;
-    const edits = new Map<number, Map<string, string>>();
-    clearDismissed(day, edits);
-    if (edits.size) dayEdits.push({ day, edits, ids: new Map() });
+    dayEdits.push({ day, edits, ids, placedRows });
   }
 
   for (const [date, n] of overflow) {
@@ -992,7 +1095,8 @@ async function planFill(
   insertions.sort((a, b) => a.at - b.at);
   const finalEdits = new Map<number, Map<string, string>>();
   const rowVisit = new Map<number, string>();
-  for (const { day, edits, ids } of dayEdits) {
+  const placedFinal = new Set<number>();
+  for (const { day, edits, ids, placedRows } of dayEdits) {
     const before = insertions
       .filter((i) => i.at < day.lastRow)
       .reduce((n, i) => n + i.count, 0);
@@ -1000,23 +1104,36 @@ async function planFill(
       if (put.size) finalEdits.set(r + before, put);
     }
     for (const [r, id] of ids) rowVisit.set(r + before, id);
+    for (const r of placedRows) placedFinal.add(r + before);
   }
   applyFileEdits(fileEdits, days, insertions, finalEdits, rowVisit);
-  return { sheet, days, insertions, finalEdits, rowVisit, warnings, placed };
+  const compacted = compactDays(
+    days,
+    rowsByNum,
+    insertions,
+    finalEdits,
+    rowVisit,
+    placedFinal,
+    canInsert,
+    warnings,
+  );
+  return {
+    sheet,
+    days,
+    insertions,
+    warnings,
+    placed,
+    ...compacted,
+  };
 }
 
 export async function fillTemplate(
   file: Buffer,
   visits: VisitCells[],
   fileEdits: FileRowEdit[] = [],
-  dismissed: Dismissal[] = [],
 ): Promise<FillResult> {
-  const { sheet, insertions, finalEdits, warnings, placed } = await planFill(
-    file,
-    visits,
-    fileEdits,
-    dismissed,
-  );
+  const { sheet, insertions, removed, finalEdits, warnings, placed } =
+    await planFill(file, visits, fileEdits);
 
   // каждая колонка правится один раз, так что исходная разметка остальных
   // ячеек строки остаётся на месте
@@ -1028,34 +1145,45 @@ export async function fillTemplate(
     return rowXml;
   };
 
+  const changed = insertions.length > 0 || removed.size > 0;
+  const toFinal: RowMap = (r) => afterRemoval(shiftRow(r, insertions), removed);
+
   // собираем XML листа: меняются только тронутые и сдвинутые строки
   let xml = '';
   let pos = 0;
   for (const row of sheet.rows) {
-    const to = shiftRow(row.r, insertions);
+    const shifted = shiftRow(row.r, insertions);
+    const gone = removed.has(shifted);
+    const to = afterRemoval(shifted, removed);
     const insertHere = insertions.find((i) => i.at === row.r);
-    const put = finalEdits.get(to);
-    if (!insertHere && to === row.r && !put?.size) continue;
+    const put = gone ? undefined : finalEdits.get(to);
+    if (!insertHere && !gone && to === row.r && !put?.size) continue;
 
     let out = '';
     if (insertHere) {
       for (let k = 0; k < insertHere.count; k++) {
-        const n = to - insertHere.count + k;
-        out += applyEdits(blankRow(insertHere.source, n), finalEdits.get(n));
+        const n = shifted - insertHere.count + k;
+        if (removed.has(n)) continue;
+        const m = afterRemoval(n, removed);
+        out += applyEdits(blankRow(insertHere.source, m), finalEdits.get(m));
       }
     }
-    const filled = applyEdits(row, put);
-    out += to === row.r ? filled : renumberRow(filled, to);
-    xml += shiftSheetRefs(sheet.xml.slice(pos, row.start), insertions) + out;
+    if (!gone) {
+      const filled = applyEdits(row, put);
+      out += to === row.r ? filled : renumberRow(filled, to);
+    }
+    xml +=
+      shiftSheetRefs(sheet.xml.slice(pos, row.start), toFinal, changed) + out;
     pos = row.start + row.xml.length;
   }
-  xml += shiftSheetRefs(sheet.xml.slice(pos), insertions);
+  xml += shiftSheetRefs(sheet.xml.slice(pos), toFinal, changed);
+  if (changed) xml = dropSingleCellMerges(xml);
 
   // без createFolders: иначе JSZip добавит в архив записи папок «xl/», «xl/worksheets/»
   sheet.zip.file(sheet.path, xml, { createFolders: false });
-  if (insertions.length) {
+  if (changed) {
     const wb = (await readPart(sheet.zip, 'xl/workbook.xml'))!;
-    const shifted = shiftDefinedNames(wb, sheet.name, insertions);
+    const shifted = shiftDefinedNames(wb, sheet.name, toFinal);
     if (shifted !== wb)
       sheet.zip.file('xl/workbook.xml', shifted, { createFolders: false });
   }
@@ -1091,9 +1219,9 @@ export interface PreviewRow {
   cells: Record<PreviewCol, string>;
   /**
    * file — визит, уже записанный в шаблоне; app — визит из приложения;
-   * plan — врач из плана, визита к нему пока нет; empty — пусто
+   * empty — пусто (день без визитов: только план)
    */
-  source: 'file' | 'app' | 'plan' | 'empty';
+  source: 'file' | 'app' | 'empty';
   /** строку добавили (визитов больше, чем строк) */
   added: boolean;
   /** визит из приложения в этой строке */
@@ -1117,10 +1245,9 @@ export async function previewDay(
   visits: VisitCells[],
   date: string,
   fileEdits: FileRowEdit[] = [],
-  dismissed: Dismissal[] = [],
 ): Promise<DayPreview> {
-  const { sheet, days, insertions, finalEdits, rowVisit, warnings } =
-    await planFill(file, visits, fileEdits, dismissed);
+  const { sheet, days, insertions, removed, finalEdits, rowVisit, warnings } =
+    await planFill(file, visits, fileEdits);
   const dayWarnings = warnings.filter((w) => w.startsWith(`${fmt(date)}:`));
   const day = days.get(date);
   if (!day) {
@@ -1129,11 +1256,14 @@ export async function previewDay(
 
   const byNum = new Map(sheet.rows.map((r) => [r.r, r]));
   // итоговый номер → исходная строка (у добавленных исходной нет)
+  const toFinal = (r: number) => afterRemoval(shiftRow(r, insertions), removed);
   const original = new Map(
-    day.slots.map((s) => [shiftRow(s.row, insertions), byNum.get(s.row)]),
+    day.slots
+      .filter((s) => !removed.has(shiftRow(s.row, insertions)))
+      .map((s) => [toFinal(s.row), byNum.get(s.row)]),
   );
-  const first = shiftRow(day.firstRow, insertions);
-  const last = shiftRow(day.lastRow, insertions);
+  const first = toFinal(day.firstRow);
+  const last = toFinal(day.lastRow);
 
   const rows: PreviewRow[] = [];
   for (let r = first; r <= last; r++) {
@@ -1147,13 +1277,12 @@ export async function previewDay(
     const visitId = rowVisit.get(r);
     // с учётом правок: удалённый визит «из файла» оставляет строку пустой
     const done = DONE_COLS.some((c) => !!value(c));
-    const person = PERSON_COLS.some((c) => !!value(c));
     rows.push({
       row: r,
-      num: src?.cells.get('B')?.value ?? '',
+      num: value('B'),
       label: value(VISIT_COLS.kind),
       cells,
-      source: visitId ? 'app' : done ? 'file' : person ? 'plan' : 'empty',
+      source: visitId ? 'app' : done ? 'file' : 'empty',
       added: !original.has(r),
       visitId,
     });

@@ -1,7 +1,6 @@
 import JSZip from 'jszip';
 import {
   analyzeTemplate,
-  dismissPlanned,
   fillTemplate,
   placeDay,
   previewDay,
@@ -11,7 +10,7 @@ import {
 
 /**
  * План с врачами: строка с ФИО (G–I), но без препаратов и комментария (J–N)
- * — запланированный врач, а не сделанный визит. День 01.10 — строки 2–7:
+ * — запланированный врач, а не сделанный визит. Нет визита — нет и в отчёте. День 01.10 — строки 2–7:
  *  2 ГП 1, Лесная 1 — Петрова Анна Ивановна (план)
  *  3 там же — Сидорова Мария (план, без отчества)
  *  4 там же — пусто
@@ -29,7 +28,24 @@ const row = (r: number, v: Partial<Record<string, string>> = {}) =>
     )
     .join('')}</row>`;
 
-async function template() {
+async function template(
+  sheetRows = row(1, { A: 'шапка' }) +
+    row(2, {
+      B: '1',
+      C: 'Врач',
+      D: '01.10.2026',
+      E: 'ГП 1',
+      F: 'Лесная 1',
+      G: 'Петрова Анна Ивановна',
+      H: 'ВОП',
+      I: '87001112233',
+    }) +
+    row(3, { B: '2', C: 'Врач', G: 'Сидорова Мария', I: '87005556677' }) +
+    row(4, { B: '3', C: 'Врач' }) +
+    row(5, { B: '4', C: 'Аптека', E: 'Аптека А', G: 'Айгуль' }) +
+    row(6, { B: '5', C: 'Аптека', G: 'Кузнецов Иван', N: 'был' }) +
+    row(7, { B: '6', C: 'Врач' }),
+) {
   const zip = new JSZip();
   zip.file(
     'xl/workbook.xml',
@@ -41,24 +57,7 @@ async function template() {
   );
   zip.file(
     'xl/worksheets/sheet1.xml',
-    '<worksheet><sheetData>' +
-      row(1, { A: 'шапка' }) +
-      row(2, {
-        B: '1',
-        C: 'Врач',
-        D: '01.10.2026',
-        E: 'ГП 1',
-        F: 'Лесная 1',
-        G: 'Петрова Анна Ивановна',
-        H: 'ВОП',
-        I: '87001112233',
-      }) +
-      row(3, { B: '2', C: 'Врач', G: 'Сидорова Мария', I: '87005556677' }) +
-      row(4, { B: '3', C: 'Врач' }) +
-      row(5, { B: '4', C: 'Аптека', E: 'Аптека А', G: 'Айгуль' }) +
-      row(6, { B: '5', C: 'Аптека', G: 'Кузнецов Иван', N: 'был' }) +
-      row(7, { B: '6', C: 'Врач' }) +
-      '</sheetData></worksheet>',
+    '<worksheet><sheetData>' + sheetRows + '</sheetData></worksheet>',
   );
   return zip.generateAsync({ type: 'nodebuffer' });
 }
@@ -168,7 +167,7 @@ describe('план с врачами', () => {
     expect(placements.map((p) => p?.row)).toEqual([4, 3]);
   });
 
-  it('отчёт: в строку врача — препараты и актуальные данные; к кому не дошли — строка плана как была', async () => {
+  it('отчёт: визит к врачу — с актуальными данными; к кому не дошли — их нет', async () => {
     const res = await fillTemplate(await template(), [
       visit('Петрова Анна Ивановна', {
         phone: '87009998877', // новый номер
@@ -182,118 +181,150 @@ describe('план с врачами', () => {
     expect(at('I2')).toBe('87009998877');
     expect(at('J2')).toBe('Коф Йог');
     expect(at('N2')).toBe('посмотрит');
-    expect([at('G3'), at('I3'), at('J3')]).toEqual([
-      'Сидорова Мария',
-      '87005556677',
-      '',
-    ]);
-    expect(at('G5')).toBe('Айгуль');
+    // уже записанный в файле визит — следующей строкой, номер по порядку
+    expect(at('G3')).toBe('Кузнецов Иван');
+    expect(at('B3')).toBe('2');
+    // аптека осталась только у него — ЛПУ подписано, хотя её строка удалена
+    expect([at('E3'), at('N3')]).toEqual(['Аптека А', 'был']);
+    expect(at('G4')).toBe('');
+    const xml = await (
+      await JSZip.loadAsync(res.file)
+    )
+      .file('xl/worksheets/sheet1.xml')!
+      .async('string');
+    expect(xml).not.toContain('Сидорова');
+    expect(xml).not.toContain('Айгуль');
   });
 
-  it('свободных строк нет — добавляются новые, а строки врачей из плана не занимаются', async () => {
-    const res = await fillTemplate(await template(), [
+  it('день без визитов остаётся планом, но без ФИО', async () => {
+    const sheetRows =
+      row(1, { A: 'шапка' }) +
+      row(2, {
+        B: '1',
+        D: '01.10.2026',
+        E: 'ГП 1',
+        F: 'Лесная 1',
+        G: 'Петрова Анна Ивановна',
+        H: 'ВОП',
+        I: '87001112233',
+      }) +
+      row(3, { B: '2', G: 'Сидорова Мария' });
+    const at = await sheet(
+      (await fillTemplate(await template(sheetRows), [])).file,
+    );
+    expect([at('D2'), at('E2'), at('F2'), at('B3')]).toEqual([
+      '01.10.2026',
+      'ГП 1',
+      'Лесная 1',
+      '2',
+    ]);
+    expect(['G2', 'H2', 'I2', 'G3'].map(at)).toEqual(['', '', '', '']);
+    const day = await previewDay(await template(sheetRows), [], '2026-10-01');
+    expect(day.rows.map((r) => r.source)).toEqual(['empty', 'empty']);
+  });
+
+  it('другой врач занимает строку планового в своём ЛПУ; от планового ничего не остаётся', async () => {
+    const file = await template();
+    const visits = [
       visit('Иванов Пётр'),
       visit('Смирнов Олег'),
       visit('Орлова Ольга'),
-    ]);
+    ];
+    const [day] = (await analyzeTemplate(file)).days;
+    const { placements, groups } = placeDay(day, visits);
+    expect(placements.map((p) => p?.row)).toEqual([4, 2, 3]);
+    // в плане не отмечены: визит был не к ним
+    expect(groups[0].doctors.map((d) => d.visited)).toEqual([false, false]);
+
+    const res = await fillTemplate(file, visits);
     expect(res.placed).toBe(3);
+    expect(res.warnings).toEqual([]);
     const at = await sheet(res.file);
-    // план на месте
-    expect([at('G2'), at('G3'), at('G5')]).toEqual([
-      'Петрова Анна Ивановна',
-      'Сидорова Мария',
-      'Айгуль',
+    expect([at('G2'), at('G3'), at('G4')]).toEqual([
+      'Смирнов Олег',
+      'Орлова Ольга',
+      'Иванов Пётр',
     ]);
-    expect(at('J2')).toBe('');
-    expect(res.warnings.join(' ')).toMatch(/добавил строк/);
+    expect(['H2', 'I2', 'I3'].map(at)).toEqual(['', '', '']);
   });
 
-  it('предпросмотр: врач из плана без визита — «plan», с визитом — «app», уже был — «file»', async () => {
+  it('провизор сменился: визит в аптеку занимает её строку, а не уходит в конец дня', async () => {
+    const file = await template(
+      row(1, { A: 'шапка' }) +
+        row(2, {
+          B: '1',
+          C: 'Врач',
+          D: '01.10.2026',
+          E: 'Аптека А',
+          F: 'Лесная 1',
+          G: 'Айгуль',
+          H: 'провизор',
+          I: '87001112233',
+        }) +
+        row(3, { B: '2', C: 'Врач', E: 'ГП 1', G: 'Петрова Анна Ивановна' }),
+    );
+    const res = await fillTemplate(file, [
+      visit('Новая Провизор', {
+        kind: 'PHARMACY',
+        placeName: 'Аптека А',
+        address: 'Лесная 1',
+      }),
+    ]);
+    expect(res.warnings).toEqual([]);
+    const at = await sheet(res.file);
+    expect([at('E2'), at('F2'), at('C2'), at('G2')]).toEqual([
+      'Аптека А',
+      'Лесная 1',
+      'Аптека',
+      'Новая Провизор',
+    ]);
+    expect(['H2', 'I2'].map(at)).toEqual(['', '']);
+    expect(at('G3')).toBe('');
+  });
+
+  it('все строки дня с врачами, визит не по плану: добавляется ровно нужная строка, ничего не теряется', async () => {
+    // последняя строка дня — тоже врач из плана
+    const file = await template(
+      row(1, { A: 'шапка' }) +
+        row(2, {
+          B: '1',
+          D: '01.10.2026',
+          E: 'ГП 1',
+          G: 'Петрова Анна Ивановна',
+        }) +
+        row(3, { B: '2', G: 'Сидорова Мария' }) +
+        row(4, { B: '1', D: '02.10.2026', E: 'ГП 2', G: 'Завтрашний Врач' }),
+    );
+    const res = await fillTemplate(file, [
+      visit('Петрова Анна Ивановна'),
+      visit('Сидорова Мария'),
+      visit('Чужой Врач', { placeName: 'ГП 9', address: 'Садовая 2' }),
+    ]);
+    expect(res.placed).toBe(3);
+    expect(res.warnings).toEqual([
+      '01.10: визитов больше, чем строк в шаблоне — добавил строк в конце дня: 1',
+    ]);
+    const at = await sheet(res.file);
+    expect([at('G2'), at('G3'), at('G4')]).toEqual([
+      'Петрова Анна Ивановна',
+      'Чужой Врач',
+      'Сидорова Мария',
+    ]);
+    expect([at('E3'), at('F3')]).toEqual(['ГП 9', 'Садовая 2']);
+    // Сидорова не переехала под чужое ЛПУ
+    expect(at('E4')).toBe('ГП 1');
+    expect(at('D5')).toBe('02.10.2026');
+  });
+
+  it('предпросмотр: только строки с визитами', async () => {
     const day = await previewDay(
       await template(),
       [visit('Петрова Анна Ивановна')],
       '2026-10-01',
     );
-    const src = Object.fromEntries(day.rows.map((r) => [r.row, r.source]));
-    expect(src).toMatchObject({
-      2: 'app',
-      3: 'plan',
-      4: 'empty',
-      5: 'plan',
-      6: 'file',
-    });
-  });
-
-  describe('врача убрали из плана', () => {
-    // ФИО в записи — другим регистром и с лишним пробелом: сравнение их не замечает
-    const gone = [{ date: '2026-10-01', fullName: ' сидорова  мария' }];
-
-    it('в плане дня его нет, строка свободна для любого визита', async () => {
-      const [day] = (await analyzeTemplate(await template())).days;
-      const removed = dismissPlanned([day], gone);
-      expect(removed).toEqual([
-        {
-          date: '2026-10-01',
-          row: 3,
-          place: 'ГП 1',
-          fullName: 'Сидорова Мария',
-          specialty: '',
-          phone: '87005556677',
-        },
-      ]);
-      const { placements, groups } = placeDay(day, [
-        visit('Иванов Пётр'),
-        visit('Смирнов Олег'),
-      ]);
-      expect(groups[0].doctors.map((d) => d.row)).toEqual([2]);
-      expect(placements.map((p) => p?.row)).toEqual([3, 4]);
-    });
-
-    it('другие дни не трогает', async () => {
-      const [day] = (await analyzeTemplate(await template())).days;
-      expect(
-        dismissPlanned(
-          [day],
-          [{ date: '2026-10-02', fullName: 'Сидорова Мария' }],
-        ),
-      ).toEqual([]);
-      expect(day.slots.find((s) => s.row === 3)!.planned).toBeDefined();
-    });
-
-    it('в отчёте его строка пустая — и когда визитов за день нет', async () => {
-      const at = await sheet(
-        (await fillTemplate(await template(), [], [], gone)).file,
-      );
-      expect([at('G3'), at('I3')]).toEqual(['', '']);
-      expect(at('G2')).toBe('Петрова Анна Ивановна'); // остальные — как в плане
-    });
-
-    it('лёг другой визит — его данные, от убранного ничего не остаётся', async () => {
-      const res = await fillTemplate(
-        await template(),
-        [visit('Петрова Анна Ивановна'), visit('Иванов Пётр')],
-        [],
-        gone,
-      );
-      const at = await sheet(res.file);
-      expect([at('G3'), at('I3'), at('J3')]).toEqual([
-        'Иванов Пётр',
-        '',
-        'Коф Йог',
-      ]);
-    });
-
-    it('предпросмотр: строка пустая', async () => {
-      const day = await previewDay(
-        await template(),
-        [],
-        '2026-10-01',
-        [],
-        gone,
-      );
-      const row = day.rows.find((r) => r.row === 3)!;
-      expect(row.source).toBe('empty');
-      expect(row.cells.G).toBe('');
-    });
+    expect(day.rows.map((r) => [r.row, r.source, r.num])).toEqual([
+      [2, 'app', '1'],
+      [3, 'file', '2'],
+    ]);
   });
 });

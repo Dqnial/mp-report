@@ -45,7 +45,6 @@ export function PreviewPage() {
   const file = rows.filter((r) => r.source === 'file').length;
   const added = rows.filter((r) => r.added).length;
   const free = rows.filter((r) => r.source === 'empty').length;
-  const planned = rows.filter((r) => r.source === 'plan').length;
 
   return (
     <Stack gap="sm">
@@ -121,7 +120,6 @@ export function PreviewPage() {
           <Text size="sm" c="dimmed" ta="center">
             Строк за день: {rows.length} · из приложения {app} · из файла {file}{' '}
             · свободно {free}
-            {planned > 0 && ` · ждут визита ${planned}`}
             {added > 0 && ` · добавлено ${added}`}
           </Text>
           {preview.data.warnings.length > 0 && (
@@ -210,11 +208,6 @@ function RowCard({ r }: { r: PreviewRow }) {
             {r.source === 'app' && (
               <Badge color="teal" variant="light" tt="none">
                 из приложения
-              </Badge>
-            )}
-            {r.source === 'plan' && (
-              <Badge color="blue" variant="light" tt="none">
-                план, визита нет
               </Badge>
             )}
             {r.source === 'file' && (

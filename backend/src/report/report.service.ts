@@ -4,7 +4,6 @@ import { toIsoDate } from '../common/dates';
 import { productCells, type VisitProduct } from '../products';
 import { commentCellText } from './comment-cell';
 import { TemplatesService } from '../templates/templates.service';
-import { PlanService } from './plan.service';
 import { ReportCacheService } from './report-cache.service';
 import { VisitsService } from '../visits/visits.service';
 import {
@@ -45,7 +44,6 @@ export class ReportService {
     private readonly templates: TemplatesService,
     private readonly visits: VisitsService,
     private readonly cache: ReportCacheService,
-    private readonly plan: PlanService,
   ) {}
 
   /**
@@ -60,16 +58,14 @@ export class ReportService {
     const cached = cacheKey && (await this.cache.get(cacheKey.key));
     if (cached) return { ...cached, fileName: template.originalName, version };
 
-    const [visits, edits, dismissed] = await Promise.all([
+    const [visits, edits] = await Promise.all([
       this.visits.forReport(userId, month),
       this.visits.fileEdits(userId, month),
-      this.plan.dismissedIn(userId, month),
     ]);
     const result = await fillTemplate(
       template.file,
       visits.map(toCells),
       edits.map(toFileEdit),
-      dismissed,
     );
     const report = { ...result, total: visits.length };
     if (cacheKey) await this.cache.set(cacheKey.key, report);
@@ -80,17 +76,15 @@ export class ReportService {
   async preview(userId: string, date: string) {
     const month = date.slice(0, 7);
     const template = await this.templates.get(userId, month);
-    const [visits, edits, dismissed] = await Promise.all([
+    const [visits, edits] = await Promise.all([
       this.visits.forReport(userId, month),
       this.visits.fileEdits(userId, month),
-      this.plan.dismissedIn(userId, month),
     ]);
     return previewDay(
       template.file,
       visits.map(toCells),
       date,
       edits.map(toFileEdit),
-      dismissed,
     );
   }
 }

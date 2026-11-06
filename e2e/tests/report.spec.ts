@@ -184,41 +184,19 @@ test('план с врачами: врачи видны в плане дня, в
     page.getByRole('link', { name: `Визит к врачу: ${second}` }),
   ).toBeVisible();
 
-  // в отчёте препарат — в строке первого врача, второй остался планом
-  const reportSheet = async () =>
-    (
-      await JSZip.loadAsync(
-        await (await page.request.get(`/api/reports/${month}`)).body(),
-      )
+  // в отчёте препарат — в строке первого врача; ко второму не зашли — его нет
+  const sheet = await (
+    await JSZip.loadAsync(
+      await (await page.request.get(`/api/reports/${month}`)).body(),
     )
-      .file('xl/worksheets/sheet1.xml')!
-      .async('string');
-  const sheet = await reportSheet();
+  )
+    .file('xl/worksheets/sheet1.xml')!
+    .async('string');
   const rowOf = (name: string) =>
     sheet.split('</row>').find((r) => r.includes(name)) ?? '';
   expect(rowOf(first)).toContain('Коф Йог');
-  expect(rowOf(second)).toContain(second);
-  expect(rowOf(second)).not.toContain('Коф Йог');
+  expect(sheet).not.toContain(second);
 
-  // второго убираем из плана: меню «⋮» → «Убрать из плана» → подтверждение
-  await page.getByRole('button', { name: `Ещё: ${second}` }).click();
-  await page.getByRole('button', { name: 'Убрать из плана' }).click();
-  await page.getByRole('button', { name: 'Да, убрать' }).click();
-  await expect(page.getByText(`Убран из плана: ${second}`)).toBeVisible();
-  await expect(
-    page.getByRole('link', { name: `Визит к врачу: ${second}` }),
-  ).toBeHidden();
-  await page.getByText('Убрано из плана: 1').click();
-  // в отчёте его строки больше нет
-  await expect
-    .poll(async () => (await reportSheet()).includes(second))
-    .toBe(false);
-  expect(await reportSheet()).toContain(first);
-
-  // передумали — вернули
-  await page.getByRole('button', { name: `Вернуть в план: ${second}` }).click();
-  await expect(
-    page.getByRole('link', { name: `Визит к врачу: ${second}` }),
-  ).toBeVisible();
-  expect(await reportSheet()).toContain(second);
+  // кнопки «убрать» больше нет: план только показывает, куда идти
+  await expect(page.getByRole('button', { name: /^Ещё: / })).toHaveCount(0);
 });

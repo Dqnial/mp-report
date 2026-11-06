@@ -36,11 +36,7 @@ describe('ResilientThrottlerStorage', () => {
 });
 
 describe('ReportCacheService', () => {
-  const prisma = (
-    count: number,
-    maxUpdated: number | null,
-    dismissed: string[] = [],
-  ) =>
+  const prisma = (count: number, maxUpdated: number | null) =>
     ({
       template: {
         findUnique: () =>
@@ -55,29 +51,19 @@ describe('ReportCacheService', () => {
             },
           }),
       },
-      planDismissal: {
-        findMany: () => Promise.resolve(dismissed.map((id) => ({ id }))),
-      },
     }) as unknown as PrismaService;
 
   it('ключ меняется при любой правке: новый визит, правка, удаление', async () => {
-    const key = async (
-      count: number,
-      updated: number | null,
-      dismissed?: string[],
-    ) =>
+    const key = async (count: number, updated: number | null) =>
       (await new ReportCacheService(
-        prisma(count, updated, dismissed),
+        prisma(count, updated),
         fakeRedis(true),
       ).key('u1', '2026-10'))!;
     const base = await key(10, 5_000);
     expect(await key(10, 5_000)).toEqual(base); // ничего не менялось — тот же
     const added = await key(11, 6_000); // новый визит
     const edited = await key(10, 7_000); // правка или мягкое удаление
-    const dismissedA = await key(10, 5_000, ['a']); // врача убрали из плана
-    const dismissedB = await key(10, 5_000, ['b']); // вернули его, убрали другого
-    expect(dismissedA.key).not.toBe(dismissedB.key);
-    for (const k of [added, edited, dismissedA, dismissedB]) {
+    for (const k of [added, edited]) {
       expect(k.key).not.toBe(base.key);
       expect(k.version).not.toBe(base.version);
     }

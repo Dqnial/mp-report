@@ -115,8 +115,7 @@ export interface PreviewRow {
     'E' | 'F' | 'G' | 'H' | 'I' | 'J' | 'K' | 'L' | 'M' | 'N',
     string
   >;
-  /** plan — врач из плана (ФИО в шаблоне), визита к нему ещё нет */
-  source: 'file' | 'app' | 'plan' | 'empty';
+  source: 'file' | 'app' | 'empty';
   added: boolean;
   visitId?: string;
 }
@@ -186,16 +185,6 @@ export interface DayPlan {
   /** есть ли этот день в шаблоне (выходных там нет) */
   inTemplate: boolean;
   groups: PlanGroup[];
-  /** врачи, убранные из плана дня (их можно вернуть); в старом кэше нет */
-  dismissed?: DismissedDoctor[];
-}
-
-export interface DismissedDoctor {
-  fullName: string;
-  specialty: string;
-  phone: string;
-  /** ЛПУ из плана, где он был */
-  place: string;
 }
 
 /** Строка экрана «Справочник»: врач/провизор или аптека без провизора. */
